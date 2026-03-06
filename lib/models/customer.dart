@@ -1,0 +1,83 @@
+import 'package:isar/isar.dart';
+import 'package:uuid/uuid.dart';
+
+part 'customer.g.dart';
+
+@collection
+class Customer {
+  // Isar primary key (local only)
+  Id isarId = Isar.autoIncrement;
+
+  // Global sync ID (UUID)
+  late String uuid;
+
+  late String name;
+  String? phone;
+  double pendingDues = 0;
+
+  // Sync fields
+  int version = 1;
+  late String deviceId;
+  bool isSynced = false;
+  bool deleted = false;
+
+  DateTime createdAt = DateTime.now();
+  DateTime updatedAt = DateTime.now();
+
+  Customer();
+
+  Customer.create({
+    required this.name,
+    this.phone,
+    this.pendingDues = 0,
+    required this.deviceId,
+  }) {
+    final now = DateTime.now();
+
+    uuid = const Uuid().v4(); // ✅ FIXED
+    createdAt = now;
+    updatedAt = now;
+
+    deleted = false;
+    isSynced = false;
+    version = 1;
+  }
+
+  // ---------------------------
+  // JSON → BACKEND
+  // ---------------------------
+  Map<String, dynamic> toJson() => {
+        "id": uuid, // ✅ backend ID = uuid
+        "name": name,
+        "phone": phone,
+        "pending_dues": pendingDues,
+        "version": version,
+        "device_id": deviceId,
+        "is_deleted": deleted,
+        "created_at": createdAt.toIso8601String(),
+        "updated_at": updatedAt.toIso8601String(),
+      };
+
+  // ---------------------------
+  // JSON ← BACKEND
+  // ---------------------------
+  static Customer fromJson(Map<String, dynamic> json) {
+    final c = Customer();
+
+    c.uuid = json["id"]; // ✅ FIXED
+    c.name = json["name"];
+    c.phone = json["phone"];
+    c.pendingDues = (json["pending_dues"] ?? 0).toDouble();
+
+    c.version = json["version"];
+    c.deviceId = json["device_id"];
+    c.deleted = json["is_deleted"] ?? false;
+
+    c.createdAt = DateTime.parse(json["created_at"]);
+    c.updatedAt = DateTime.parse(json["updated_at"]);
+
+    c.isSynced = true;
+
+    return c;
+  }
+}
