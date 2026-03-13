@@ -125,10 +125,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   return;
                 }
 
+                final currentProductUuid = isEdit ? product.uuid : '';
+
                 // Prevent duplicate product names (case-insensitive)
                 final existing = _products.where((p) =>
                     p.name.toLowerCase() == name.toLowerCase() &&
-                    (!isEdit || p.uuid != product!.uuid));
+                    (!isEdit || p.uuid != currentProductUuid));
                 if (existing.isNotEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -138,7 +140,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 }
 
                 if (isEdit) {
-                  product!
+                  final editingProduct = product;
+                  editingProduct
                     ..name = name
                     ..purchasePrice = purchasePrice
                     ..salePrice = salePrice
@@ -147,7 +150,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ..isSynced = false
                     ..version += 1;
 
-                  await DBService.updateProduct(product);
+                  await DBService.updateProduct(editingProduct);
                 } else {
                   final deviceId = await DeviceService.getDeviceId();
 
@@ -162,6 +165,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   await DBService.addProduct(newProduct);
                 }
 
+                if (!context.mounted) return;
                 Navigator.pop(context);
                 _loadProducts();
               },
@@ -208,6 +212,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
               await DBService.updateProduct(product);
 
+              if (!context.mounted) return;
               Navigator.pop(context);
               _loadProducts();
             },

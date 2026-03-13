@@ -134,10 +134,12 @@ class _CustomerScreenState extends State<CustomerScreen> {
                   return;
                 }
 
+                final currentCustomerUuid = isEdit ? customer.uuid : '';
+
                 // Prevent duplicate customer names (case-insensitive)
                 final existing = _customers.where((c) =>
                     c.name.toLowerCase() == name.toLowerCase() &&
-                    (!isEdit || c.uuid != customer!.uuid));
+                    (!isEdit || c.uuid != currentCustomerUuid));
                 if (existing.isNotEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -147,12 +149,13 @@ class _CustomerScreenState extends State<CustomerScreen> {
                 }
 
                 if (isEdit) {
-                  customer!.name = name;
-                  customer.phone = phone;
-                  customer.updatedAt = DateTime.now();
-                  customer.version++;
+                  final editingCustomer = customer;
+                  editingCustomer.name = name;
+                  editingCustomer.phone = phone;
+                  editingCustomer.updatedAt = DateTime.now();
+                  editingCustomer.version++;
 
-                  await DBService.updateCustomer(customer);
+                  await DBService.updateCustomer(editingCustomer);
                 } else {
                   final newCustomer = Customer.create(
                     name: name,
@@ -163,6 +166,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
                   await DBService.addCustomer(newCustomer);
                 }
 
+                if (!context.mounted) return;
                 Navigator.pop(context);
                 _loadCustomers();
               },

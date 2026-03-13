@@ -110,7 +110,8 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
                 );
 
                 await DBService.addSupplierPayment(payment);
-                if (context.mounted) Navigator.pop(context);
+                if (!mounted) return;
+                Navigator.pop(context);
                 await _loadDetails();
               },
               child: const Text('Save'),

@@ -6,7 +6,6 @@ import 'package:ssma/screens/new_sale_screen.dart';
 import 'package:ssma/screens/sales_history_screen.dart';
 
 import 'services/db_service.dart';
-import 'services/device_service.dart';
 import 'services/sync_service.dart';
 
 late SyncService syncService; // global singleton
@@ -17,16 +16,13 @@ Future<void> main() async {
   // 1. Initialize database
   await DBService.initializeIsar();
 
-  // 2. Get persistent device ID
-  final deviceId = await DeviceService.getDeviceId();
-
-  // 3. Initialize Sync Service
+  // 2. Initialize Sync Service
   syncService = SyncService();
 
-  // 4. Run app
+  // 3. Run app
   runApp(const MyApp());
 
-  // 5. Trigger initial sync (non-blocking)
+  // 4. Trigger initial sync (non-blocking)
   _startInitialSync();
 }
 

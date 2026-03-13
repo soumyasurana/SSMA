@@ -95,7 +95,7 @@ class PDFService {
                 ),
               ),
 
-            pw.Table.fromTextArray(
+            pw.TableHelper.fromTextArray(
               headers: ['Product', 'Qty', 'Rate', 'Total'],
               data: sale.items.map((item) {
                 return [
@@ -183,7 +183,8 @@ class PDFService {
     required DateTime endDate,
   }) async {
     final pdf = pw.Document();
-    final font = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Regular.ttf"));
+    final font =
+        pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Regular.ttf"));
     final boldFont = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
     final formatter = DateFormat('dd MMM yyyy');
 
@@ -297,7 +298,6 @@ class PDFService {
     required DateTime toDate,
   }) async {
     final pdf = pw.Document();
-    final font = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Regular.ttf"));
     final boldFont = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
     final formatter = DateFormat('dd MMM yyyy');
 

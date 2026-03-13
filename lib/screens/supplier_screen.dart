@@ -131,7 +131,7 @@ class _SupplierScreenState extends State<SupplierScreen> {
     _addressController.text = supplier.address ?? "";
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Edit Supplier'),
         content: SingleChildScrollView(
           child: Column(
@@ -176,7 +176,8 @@ class _SupplierScreenState extends State<SupplierScreen> {
               supplier.contact = contact;
               supplier.address = address.isEmpty ? null : address;
               await DBService.updateSupplier(supplier);
-              Navigator.pop(context);
+              if (!dialogContext.mounted) return;
+              Navigator.pop(dialogContext);
               _nameController.clear();
               _contactController.clear();
               _addressController.clear();
@@ -192,7 +193,7 @@ class _SupplierScreenState extends State<SupplierScreen> {
   void _confirmDeleteSupplier(Supplier supplier) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Delete Supplier'),
         content: Text('Are you sure you want to delete "${supplier.name}"?'),
         actions: [
@@ -203,7 +204,8 @@ class _SupplierScreenState extends State<SupplierScreen> {
           ElevatedButton(
             onPressed: () async {
               await DBService.deleteSupplier(supplier.uuid);
-              Navigator.pop(context);
+              if (!dialogContext.mounted) return;
+              Navigator.pop(dialogContext);
               await _loadSuppliers();
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),

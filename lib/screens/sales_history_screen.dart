@@ -70,6 +70,7 @@ void _confirmDelete(Sale sale) {
         ElevatedButton(
           onPressed: () async {
             await DBService.deleteSaleAndRestoreStock(sale.uuid);
+            if (!context.mounted) return;
             Navigator.pop(context);
             _loadSales();
             ScaffoldMessenger.of(context).showSnackBar(
@@ -148,6 +149,7 @@ void _confirmDelete(Sale sale) {
                 newAmountReceived: sale.amountReceived + amount,
               );
 
+              if (!context.mounted) return;
               Navigator.pop(context);
               _loadSales();
 

@@ -86,6 +86,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     );
 
     await DBService.addCustomerPayment(payment);
+    if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("Payment recorded successfully.")),
@@ -314,6 +315,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                   await DBService
                                       .deleteCustomerPayment(
                                           p.isarId);
+                                  if (!context.mounted) return;
                                   _loadCustomerData();
                                   ScaffoldMessenger.of(context)
                                       .showSnackBar(

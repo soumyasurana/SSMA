@@ -173,6 +173,7 @@ class _NewPurchaseScreenState extends State<NewPurchaseScreen> {
       await DBService.addSupplierPayment(payment);
     }
 
+    if (!mounted) return;
     Navigator.pop(context);
   }
 
