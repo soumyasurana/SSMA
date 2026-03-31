@@ -4,7 +4,7 @@ import 'package:ssma/models/customer.dart';
 import 'package:ssma/models/sale.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/services/db_service.dart';
-import 'package:ssma/services/device_service.dart'; // must provide deviceId
+import 'package:ssma/services/device_service.dart'; 
 
 class CustomerDetailScreen extends StatefulWidget {
   final Customer customer;
