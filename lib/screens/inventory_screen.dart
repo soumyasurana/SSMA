@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:ssma/models/product.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/device_service.dart'; // <-- for deviceId
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
+import 'package:excel/excel.dart';
+import 'dart:io';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -38,7 +42,98 @@ class _InventoryScreenState extends State<InventoryScreen> {
     _quantityController.dispose();
     super.dispose();
   }
+  // ===================== EXCEL IMPORT =====================
 
+Future<void> _importExcel() async {
+  print("IMPORT CLICKED");
+
+  final result = await FilePicker.platform.pickFiles(
+    type: FileType.any, // ✅ FIXED
+    withData: true,     // 🔥 IMPORTANT
+  );
+
+  print(result);
+
+  if (result == null) {
+    print("❌ Picker failed or cancelled");
+    return;
+  }
+
+  final file = result.files.single;
+
+if (file.path == null) {
+  print("❌ Path is null");
+  return;
+}
+
+final bytes = await File(file.path!).readAsBytes();
+
+await _processExcel(bytes);
+}
+
+Future<void> _processExcel(Uint8List bytes) async {
+  final excel = Excel.decodeBytes(bytes);
+  final deviceId = await DeviceService.getDeviceId();
+
+  int success = 0;
+  int failed = 0;
+
+  for (var table in excel.tables.keys) {
+    final rows = excel.tables[table]!.rows;
+
+    for (int i = 1; i < rows.length; i++) {
+      final row = rows[i];
+
+      try {
+        final name = row[0]?.value?.toString().trim() ?? '';
+        final purchasePrice =
+            double.tryParse(row[1]?.value.toString() ?? '') ?? 0;
+        final salePrice =
+            double.tryParse(row[2]?.value.toString() ?? '') ?? 0;
+        final quantity =
+            int.tryParse(row[3]?.value.toString() ?? '') ?? 0;
+
+        // SAME VALIDATION (unchanged logic)
+        if (name.isEmpty || purchasePrice < 0 || salePrice < 0) {
+          failed++;
+          continue;
+        }
+
+        // SAME DUPLICATE CHECK (unchanged logic)
+        final exists = _products.where((p) =>
+            p.name.toLowerCase() == name.toLowerCase());
+
+        if (exists.isNotEmpty) {
+          failed++;
+          continue;
+        }
+
+        final product = Product.create(
+          name: name,
+          purchasePrice: purchasePrice,
+          salePrice: salePrice,
+          quantity: quantity,
+          deviceId: deviceId,
+        );
+
+        await DBService.addProduct(product);
+        success++;
+      } catch (e) {
+        failed++;
+      }
+    }
+  }
+
+  await _loadProducts();
+
+  if (!mounted) return;
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text('Import complete: $success added, $failed failed'),
+    ),
+  );
+}
   Future<void> _loadProducts() async {
     final products = await DBService.getProducts();
     setState(() {
@@ -288,11 +383,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showProductDialog(),
-        icon: const Icon(Icons.add),
-        label: const Text('Add Product'),
-      ),
+floatingActionButton: Column(
+  mainAxisSize: MainAxisSize.min,
+  children: [
+    FloatingActionButton.extended(
+      onPressed: _importExcel,
+      icon: const Icon(Icons.upload_file),
+      label: const Text('Import'),
+    ),
+    const SizedBox(height: 10),
+    FloatingActionButton.extended(
+      onPressed: () => _showProductDialog(),
+      icon: const Icon(Icons.add),
+      label: const Text('Add Product'),
+    ),
+  ],
+),
     );
   }
 }

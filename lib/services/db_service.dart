@@ -1,9 +1,12 @@
+import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:ssma/models/customer.dart';
 import 'package:ssma/models/customer_payment.dart';
+import 'package:ssma/models/change_log.dart';
+import 'package:ssma/models/item.dart';
 import 'package:ssma/models/product.dart';
 import 'package:ssma/models/purchase.dart';
 import 'package:ssma/models/sale.dart';
@@ -39,6 +42,8 @@ class DBService {
       [
         CustomerSchema,
         ProductSchema,
+        ItemSchema,
+        ChangeLogSchema,
         SaleSchema,
         PurchaseSchema,
         CustomerPaymentSchema,
@@ -46,7 +51,7 @@ class DBService {
         SupplierPaymentSchema,
       ],
       directory: dir.path,
-      inspector: true,
+      inspector: kDebugMode,
     );
   }
 

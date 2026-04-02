@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:ssma/screens/customer_screen.dart';
 import 'package:ssma/screens/home_screen.dart';
@@ -8,30 +11,52 @@ import 'package:ssma/screens/sales_history_screen.dart';
 import 'services/db_service.dart';
 import 'services/sync_service.dart';
 
-late SyncService syncService; // global singleton
+SyncService? syncService;
+const bool kEnableLanSync =
+    bool.fromEnvironment('ENABLE_LAN_SYNC', defaultValue: true);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError: ${details.exceptionAsString()}');
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('PlatformDispatcher error: $error');
+    return true;
+  };
 
-  // 1. Initialize database
   await DBService.initializeIsar();
-
-  // 2. Initialize Sync Service
-  syncService = SyncService();
-
-  // 3. Run app
   runApp(const MyApp());
-
-  // 4. Trigger initial sync (non-blocking)
-  _startInitialSync();
+  if (kEnableLanSync) {
+    unawaited(_bootstrapSync());
+  }
 }
 
-Future<void> _startInitialSync() async {
+Future<void> _bootstrapSync() async {
   try {
-    await syncService.sync();
-    debugPrint("✅ Initial sync completed");
-  } catch (e) {
-    debugPrint("⚠️ Initial sync failed: $e");
+    await Future<void>.delayed(const Duration(seconds: 2));
+    final service = SyncService();
+    syncService = service;
+    final started = await service.start();
+    if (!started) {
+      debugPrint('LAN sync disabled: startup failed safely.');
+      return;
+    }
+    unawaited(_startInitialSync(service));
+  } catch (error, stackTrace) {
+    debugPrint('Sync bootstrap failed: $error');
+    debugPrintStack(stackTrace: stackTrace);
+  }
+}
+
+Future<void> _startInitialSync(SyncService service) async {
+  try {
+    await service.sync();
+    debugPrint('Initial sync completed');
+  } catch (error, stackTrace) {
+    debugPrint('Initial sync failed: $error');
+    debugPrintStack(stackTrace: stackTrace);
   }
 }
 
@@ -76,17 +101,20 @@ class _MainNavigationState extends State<MainNavigation> {
   @override
   void initState() {
     super.initState();
-    _startAutoSync();
+    if (kEnableLanSync) {
+      _startAutoSync();
+    }
   }
 
   void _startAutoSync() {
     Future.doWhile(() async {
       await Future.delayed(const Duration(minutes: 5));
       try {
-        await syncService.sync();
-        debugPrint("🔄 Auto sync successful");
-      } catch (e) {
-        debugPrint("⚠️ Auto sync failed: $e");
+        await syncService?.sync();
+        debugPrint('Auto sync successful');
+      } catch (error, stackTrace) {
+        debugPrint('Auto sync failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
       }
       return mounted;
     });
