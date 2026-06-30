@@ -13,6 +13,7 @@ abstract class IDBService {
   Future<List<Customer>> getCustomers();
   Future<void> recordSale(Sale sale);
   Future<void> updateProduct(Product product);
+  Future<Product?> getProductByUuid(String uuid);
 }
 
 /// Adapter that delegates to your existing static DBService methods.
@@ -29,6 +30,9 @@ class RealDBServiceAdapter implements IDBService {
 
   @override
   Future<void> updateProduct(Product product) => DBService.updateProduct(product);
+
+  @override
+  Future<Product?> getProductByUuid(String uuid) => DBService.getProductByUuid(uuid);
 }
 
 class NewSaleScreen extends StatefulWidget {
@@ -54,12 +58,14 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   final TextEditingController _searchProductController = TextEditingController();
   final TextEditingController _commentController = TextEditingController();
   final TextEditingController _amountReceivedController = TextEditingController();
+  final List<Map<String, TextEditingController>> _extraCharges = [];
 
   SaleType _selectedSaleType = SaleType.cash;
   Customer? _selectedCustomer;
   DateTime _selectedDate = DateTime.now();
-  late String _deviceId;
+  String _deviceId = '';
   bool _isSaving = false;
+  Map<String, double> _productsToUpdatePrice = {};
 
   // convenience getter that returns injected service or default real adapter
   IDBService get _db => widget.dbService ?? RealDBServiceAdapter();
@@ -91,7 +97,11 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     _searchProductController.dispose();
     _commentController.dispose();
     _amountReceivedController.dispose();
-    super.dispose();
+    for (final charge in _extraCharges) {
+      charge['key']!.dispose();
+      charge['value']!.dispose();
+    }
+    super.dispose(); // must be last
   }
 
   Future<void> loadData() async {
@@ -117,6 +127,13 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     }
   }
 
+
+  double _calculateExtraCharges() {
+  return _extraCharges.fold(0.0, (sum, charge) {
+    return sum + (double.tryParse(charge['value']!.text) ?? 0.0);
+  });
+  }
+
   void _filterProducts(String query) {
     final lower = query.toLowerCase();
     setState(() {
@@ -128,6 +145,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     final qtyController = TextEditingController(text: '1');
     final priceController =
         TextEditingController(text: product.salePrice.toStringAsFixed(2));
+    bool updateInventoryPrice = false;
 
     if (product.quantity <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -144,52 +162,73 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Add ${product.name}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: qtyController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Quantity'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: priceController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Sale Price'),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (innerContext, setDialogState) => AlertDialog(
+          title: Text('Add ${product.name}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: qtyController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Quantity'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: priceController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Sale Price'),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                title: const Text('Update price in inventory as well'),
+                value: updateInventoryPrice,
+                onChanged: (val) {
+                  setDialogState(() {
+                    updateInventoryPrice = val ?? false;
+                  });
+                },
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                final qty = int.tryParse(qtyController.text);
+                final price = double.tryParse(priceController.text);
+
+                if (qty != null && qty > 0 && price != null && price >= 0) {
+                  if (updateInventoryPrice) {
+                    _productsToUpdatePrice[product.uuid] = price;
+                  }
+
+                  if (!mounted) return;
+                  setState(() {
+                    _saleItems.add(
+                      SaleItem.create(
+                        productUuid: product.uuid,
+                        productName: product.name,
+                        quantity: qty,
+                        unitPrice: price,
+                        purchasePrice: product.purchasePrice,
+                        deviceId: _deviceId,
+                      ),
+                    );
+                  });
+                }
+                if (innerContext.mounted) {
+                  Navigator.pop(innerContext);
+                }
+              },
+              child: const Text('Add'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              final qty = int.tryParse(qtyController.text);
-              final price = double.tryParse(priceController.text);
-
-              if (qty != null && qty > 0 && price != null && price >= 0) {
-                setState(() {
-                  _saleItems.add(
-                    SaleItem.create(
-                      productUuid: product.uuid,
-                      productName: product.name,
-                      quantity: qty,
-                      unitPrice: price,
-                      purchasePrice: product.purchasePrice,
-                      deviceId: _deviceId,
-                    ),
-                  );
-                });
-              }
-              Navigator.pop(context);
-            },
-            child: const Text('Add'),
-          ),
-        ],
       ),
     );
   }
@@ -320,11 +359,13 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   void _removeItem(SaleItem item) {
     setState(() {
       _saleItems.remove(item);
+      _productsToUpdatePrice.remove(item.productUuid);
     });
   }
 
   double _calculateTotalAmount() {
-    return _saleItems.fold(0.0, (sum, item) => sum + item.unitPrice * item.quantity);
+    final itemsTotal = _saleItems.fold(0.0, (sum, item) => sum + item.unitPrice * item.quantity);
+    return itemsTotal + _calculateExtraCharges();
   }
 
     Future<void> _completeSale() async {
@@ -377,8 +418,17 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       date: _selectedDate,
       items: _saleItems,
       saleType: _selectedSaleType,
-      comment:
-          _commentController.text.isEmpty ? null : _commentController.text,
+      comment: () {
+        String c = _commentController.text.trim();
+        if (_extraCharges.isNotEmpty) {
+          final lines = _extraCharges
+              .where((e) => e['key']!.text.isNotEmpty && e['value']!.text.isNotEmpty)
+              .map((e) => '${e['key']!.text}: Rs.${e['value']!.text}')
+              .join(', ');
+          if (lines.isNotEmpty) c = c.isEmpty ? 'Charges: $lines' : '$c | Charges: $lines';
+        }
+        return c.isEmpty ? null : c;
+      }(),
       deviceId: _deviceId,
     );
 
@@ -437,6 +487,17 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     try {
       await _db.recordSale(newSale);
       await PDFService.generateInvoice(newSale);
+      
+      for (final entry in _productsToUpdatePrice.entries) {
+        final productUuid = entry.key;
+        final newPrice = entry.value;
+        final productToUpdate = await _db.getProductByUuid(productUuid);
+        if (productToUpdate != null) {
+          productToUpdate.salePrice = newPrice;
+          await _db.updateProduct(productToUpdate);
+        }
+      }
+
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -453,6 +514,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
         _commentController.clear();
         _amountReceivedController.clear();
         _selectedDate = DateTime.now();
+        _productsToUpdatePrice.clear();
       });
     } catch (e) {
       if (!mounted) return;
@@ -630,19 +692,133 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                 ),
               ),
               const SizedBox(height: 10),
+// ── Extra Charges ──────────────────────────────────────────
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Extra Charges',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                        TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _extraCharges.add({
+                                'key': TextEditingController(),
+                                'value': TextEditingController(),
+                              });
+                            });
+                          },
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Add'),
+                        ),
+                      ],
+                    ),
+                    ..._extraCharges.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      final charge = entry.value;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: charge['key'],
+                                decoration: const InputDecoration(
+                                  labelText: 'Label (e.g. Courier)',
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 2,
+                              child: TextField(
+                                controller: charge['value'],
+                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                decoration: const InputDecoration(
+                                  labelText: 'Amount',
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                                onChanged: (_) => setState(() {}), // recompute total live
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, color: Colors.red, size: 20),
+                              onPressed: () {
+                                setState(() {
+                                  charge['key']!.dispose();
+                                  charge['value']!.dispose();
+                                  _extraCharges.removeAt(i);
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 10),
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
                 decoration: BoxDecoration(
-                  color: Colors.indigo.shade100,
+                  color: Colors.indigo.shade50,
                   borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.indigo.shade200),
                 ),
-                child: Row(
+                child: Column(
                   children: [
-                    const Text('Total: ', style: TextStyle(fontSize: 18)),
-                    const Spacer(),
-                    Text(
-                      '₹${_calculateTotalAmount().toStringAsFixed(2)}',
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    Row(
+                      children: [
+                        const Text('Items Total:', style: TextStyle(fontSize: 15)),
+                        const Spacer(),
+                        Text(
+                          'Rs.${_saleItems.fold(0.0, (sum, item) => sum + item.unitPrice * item.quantity).toStringAsFixed(2)}',
+                          style: const TextStyle(fontSize: 15),
+                        ),
+                      ],
+                    ),
+                    if (_extraCharges.isNotEmpty) ...[
+                      const Divider(height: 12),
+                      ..._extraCharges.map((charge) {
+                        final label = charge['key']!.text.isEmpty ? 'Extra' : charge['key']!.text;
+                        final amount = double.tryParse(charge['value']!.text) ?? 0.0;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Row(
+                            children: [
+                              Text(label, style: const TextStyle(fontSize: 14, color: Colors.grey)),
+                              const Spacer(),
+                              Text('Rs.${amount.toStringAsFixed(2)}',
+                                  style: const TextStyle(fontSize: 14, color: Colors.grey)),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                    const Divider(height: 12),
+                    Row(
+                      children: [
+                        const Text('Grand Total:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        const Spacer(),
+                        Text(
+                          'Rs.${_calculateTotalAmount().toStringAsFixed(2)}',
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.indigo),
+                        ),
+                      ],
                     ),
                   ],
                 ),

@@ -5,6 +5,8 @@ import 'package:ssma/services/db_service.dart';
 import 'low_stock_screen.dart';
 import 'supplier_screen.dart';
 import 'report_screen.dart';
+import 'package:ssma/widgets/sync_indicator.dart';
+import 'package:ssma/screens/sync_settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -95,6 +97,9 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () => Scaffold.of(context).openDrawer(),
           ),
         ),
+        actions: const [
+          SyncIndicator(),
+        ],
       ),
       drawer: Drawer(
         child: ListView(
@@ -121,6 +126,14 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const ReportScreen()),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.sync),
+              title: const Text('Sync Settings'),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SyncSettingsScreen()),
               ),
             ),
           ],
