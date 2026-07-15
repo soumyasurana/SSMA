@@ -5,10 +5,6 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-import 'models/peer_device.dart';
-import 'models/sync_change_log.dart';
-import 'models/sync_cursor.dart';
-import 'models/pairing_request.dart';
 import 'services/change_journal.dart';
 import 'services/change_processor.dart';
 import 'services/conflict_resolver.dart';
@@ -34,6 +30,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
   final int port;
   String? _deviceId;
   String? _deviceName;
+  final String appVersion = '1.0.0';
 
   // -------------------------------------------------------------------------
   // Public services (read-only from outside)
@@ -86,6 +83,9 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     );
     deviceRegistry = DeviceRegistry(isar: isar);
 
+    // 2b. Backfill the v2 journal for legacy rows that predate sync v2.
+    await DBService.backfillSyncV2Journal(changeJournal);
+
     // 3. Sync manager
     syncManager = SyncManager(
       isar: isar,
@@ -106,7 +106,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
       localDeviceId: _deviceId!,
       localDeviceName: _deviceName!,
       localPlatform: localPlatform,
-      localAppVersion: '1.0.0',
+      localAppVersion: appVersion,
       isar: isar,
       journal: changeJournal,
       changeProcessor: changeProcessor,
@@ -120,7 +120,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
       localDeviceId: _deviceId!,
       localDeviceName: _deviceName!,
       localPlatform: localPlatform,
-      localAppVersion: '1.0.0',
+      localAppVersion: appVersion,
       port: port,
       deviceRegistry: deviceRegistry,
       syncManager: syncManager,
@@ -132,7 +132,8 @@ class SyncInitializerV2 with WidgetsBindingObserver {
 
     _initialized = true;
 
-    debugPrint('[SyncInitializerV2]: ✅ initialized — deviceId=$_deviceId port=$port');
+    debugPrint(
+        '[SyncInitializerV2]: ✅ initialized — deviceId=$_deviceId port=$port');
   }
 
   Future<void> shutdown() async {
@@ -226,7 +227,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     for (final c in cursors) {
       await cursorManager.resetCursor(c.remoteDeviceId);
     }
-    await syncManager.syncWithAllPeers();
+    await syncManager.syncWithAllPeers(respectAutoSyncFlag: false);
   }
 
   /// Returns the current maximum local change sequence.

@@ -11,7 +11,6 @@ import '../models/sync_change_log.dart';
 import 'change_journal.dart';
 import 'change_processor.dart';
 import 'cursor_manager.dart';
-import 'cursor_manager.dart';
 import 'device_registry.dart';
 
 class _PhaseResult {
@@ -24,7 +23,6 @@ class _PhaseResult {
 class SyncCycleResult {
   final String peerDeviceId;
   final bool success;
-  final int changesSent;
   final int changesSent;
   final int changesReceived;
   final int unresolvedErrors;
@@ -88,8 +86,13 @@ class SyncManager {
 
   bool get isSyncing => _isSyncing;
 
-  /// Triggers a sync with all paired, auto-sync-enabled peers that are reachable.
-  Future<List<SyncCycleResult>> syncWithAllPeers() async {
+  /// Triggers a sync with all paired peers.
+  ///
+  /// When [respectAutoSyncFlag] is true, only devices with auto-sync enabled
+  /// are included. Manual "Sync Now" flows can pass false to sync every paired
+  /// device regardless of its auto-sync toggle.
+  Future<List<SyncCycleResult>> syncWithAllPeers(
+      {bool respectAutoSyncFlag = true}) async {
     if (_isSyncing) {
       debugPrint('[SyncManager]: sync already in progress — ignoring request');
       return [];
@@ -101,8 +104,11 @@ class SyncManager {
     final results = <SyncCycleResult>[];
 
     try {
-      final peers = await deviceRegistry.getAutoSyncTargets();
-      debugPrint('[SyncManager]: starting sync with ${peers.length} peer(s)');
+      final peers = respectAutoSyncFlag
+          ? await deviceRegistry.getAutoSyncTargets()
+          : await deviceRegistry.getPairedDevices();
+      debugPrint('[SyncManager]: starting sync with ${peers.length} peer(s) '
+          '(respectAutoSyncFlag=$respectAutoSyncFlag)');
 
       for (final peer in peers) {
         final result = await _syncWithPeer(peer);
@@ -110,7 +116,8 @@ class SyncManager {
       }
 
       final anySuccess = results.any((r) => r.success);
-      statusNotifier.setStatus(anySuccess ? SyncStatusV2.idle : SyncStatusV2.error);
+      statusNotifier
+          .setStatus(anySuccess ? SyncStatusV2.idle : SyncStatusV2.error);
     } catch (e, st) {
       debugPrint('[SyncManager]: ❌ syncWithAllPeers error: $e\n$st');
       statusNotifier.setStatus(SyncStatusV2.error);
@@ -141,19 +148,21 @@ class SyncManager {
   // Sync cycle (per peer)
   // -----------------------------------------------------------------------
 
-    Future<SyncCycleResult> _syncWithPeer(PeerDevice peer) async {
+  Future<SyncCycleResult> _syncWithPeer(PeerDevice peer) async {
     final startTime = DateTime.now();
     int totalSent = 0;
     int totalReceived = 0;
     int totalErrors = 0;
 
-    debugPrint('[SyncManager]: → starting sync with ${peer.deviceId} (${peer.lastKnownIp}:${peer.lastKnownPort})');
+    debugPrint(
+        '[SyncManager]: → starting sync with ${peer.deviceId} (${peer.lastKnownIp}:${peer.lastKnownPort})');
 
     for (int attempt = 1; attempt <= _maxRetries; attempt++) {
       try {
         // Trust check
         if (!peer.isPaired) {
-          debugPrint('[SyncManager]: ⛔ ${peer.deviceId} is not paired — skipping');
+          debugPrint(
+              '[SyncManager]: ⛔ ${peer.deviceId} is not paired — skipping');
           return SyncCycleResult(
             peerDeviceId: peer.deviceId,
             success: false,
@@ -166,7 +175,8 @@ class SyncManager {
 
         // Permission check
         if (!peer.receiveEnabled && !peer.sendEnabled) {
-          debugPrint('[SyncManager]: ⛔ ${peer.deviceId} has both send and receive disabled — skipping');
+          debugPrint(
+              '[SyncManager]: ⛔ ${peer.deviceId} has both send and receive disabled — skipping');
           return SyncCycleResult(
             peerDeviceId: peer.deviceId,
             success: false,
@@ -182,8 +192,11 @@ class SyncManager {
         // Phase 1: Handshake
         final handshakeOk = await _handshake(peer);
         if (!handshakeOk) {
-          throw Exception('Handshake failed — incompatible peer or unreachable');
+          debugPrint('[SyncManager]: ❌ handshake result with ${peer.deviceId}');
+          throw Exception(
+              'Handshake failed — incompatible peer or unreachable');
         }
+        debugPrint('[SyncManager]: ✅ handshake result with ${peer.deviceId}');
 
         // Phase 2: Pull (receive changes from peer)
         if (peer.receiveEnabled) {
@@ -205,7 +218,8 @@ class SyncManager {
         await deviceRegistry.setConnectionStatus(peer.deviceId, 'reachable');
 
         final duration = DateTime.now().difference(startTime);
-        debugPrint('[SyncManager]: ✅ sync with ${peer.deviceId} complete — sent=$totalSent recv=$totalReceived errors=$totalErrors in ${duration.inMilliseconds}ms');
+        debugPrint(
+            '[SyncManager]: ✅ sync with ${peer.deviceId} complete — sent=$totalSent recv=$totalReceived errors=$totalErrors in ${duration.inMilliseconds}ms');
 
         return SyncCycleResult(
           peerDeviceId: peer.deviceId,
@@ -216,14 +230,16 @@ class SyncManager {
           duration: duration,
         );
       } catch (e, st) {
-        debugPrint('[SyncManager]: ❌ sync attempt $attempt/$_maxRetries with ${peer.deviceId}: $e\n$st');
+        debugPrint(
+            '[SyncManager]: ❌ sync attempt $attempt/$_maxRetries with ${peer.deviceId}: $e\n$st');
 
         if (attempt < _maxRetries) {
           final backoff = _retryBackoffBase * pow(2, attempt - 1).toInt();
           debugPrint('[SyncManager]: retrying in ${backoff.inSeconds}s...');
           await Future.delayed(backoff);
         } else {
-          await deviceRegistry.setConnectionStatus(peer.deviceId, 'unreachable');
+          await deviceRegistry.setConnectionStatus(
+              peer.deviceId, 'unreachable');
           return SyncCycleResult(
             peerDeviceId: peer.deviceId,
             success: false,
@@ -254,23 +270,30 @@ class SyncManager {
   // -----------------------------------------------------------------------
 
   Future<bool> _handshake(PeerDevice peer) async {
-    final url = Uri.parse('http://${peer.lastKnownIp}:${peer.lastKnownPort}/sync/v2/handshake');
+    final url = Uri.parse(
+        'http://${peer.lastKnownIp}:${peer.lastKnownPort}/sync/v2/handshake');
     try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'deviceId': localDeviceId,
-          'protocolVersion': 2,
-          'appVersion': '1.0.0',
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'x-device-id': localDeviceId,
+            },
+            body: jsonEncode({
+              'deviceId': localDeviceId,
+              'protocolVersion': 2,
+              'appVersion': '1.0.0',
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
         final peerProtocol = body['protocolVersion'] as int? ?? 1;
         if (peerProtocol < 2) {
-          debugPrint('[SyncManager]: ⚠ peer ${peer.deviceId} uses protocol v$peerProtocol < 2 — skipping');
+          debugPrint(
+              '[SyncManager]: ⚠ peer ${peer.deviceId} uses protocol v$peerProtocol < 2 — skipping');
           return false;
         }
         return true;
@@ -303,7 +326,10 @@ class SyncManager {
         '/sync/v2/pull?since=$cursor&limit=$_batchSize',
       );
 
-      final response = await http.get(url).timeout(const Duration(seconds: 30));
+      final response = await http.get(
+        url,
+        headers: {'x-device-id': localDeviceId},
+      ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) {
         throw Exception('PULL HTTP ${response.statusCode}: ${response.body}');
@@ -317,7 +343,8 @@ class SyncManager {
 
       // Detect compaction gap: peer has pruned history our cursor was in
       if (peerMinSeq > 0 && cursor < peerMinSeq) {
-        debugPrint('[SyncManager]: ⚠ peer ${peer.deviceId} minSeq=$peerMinSeq > our cursor=$cursor '
+        debugPrint(
+            '[SyncManager]: ⚠ peer ${peer.deviceId} minSeq=$peerMinSeq > our cursor=$cursor '
             '(peer history was compacted). Resetting to peerMinSeq-1.');
         cursor = peerMinSeq - 1;
         await cursorManager.advanceReceiveCursor(
@@ -328,16 +355,21 @@ class SyncManager {
         continue;
       }
 
-      final changes = rawChanges.map((e) => SyncChangeLog.fromJson(e as Map<String, dynamic>)).toList();
+      final changes = rawChanges
+          .map((e) => SyncChangeLog.fromJson(e as Map<String, dynamic>))
+          .toList();
 
       if (changes.isNotEmpty) {
         final result = await changeProcessor.processBatch(changes);
         totalReceived += result.applied;
         totalErrors += result.errors;
 
-        final actualNewSeq = result.errors > 0 && result.lastProcessedSeq != -1 ? result.lastProcessedSeq : nextCursor;
+        final actualNewSeq = result.errors > 0 && result.lastProcessedSeq != -1
+            ? result.lastProcessedSeq
+            : nextCursor;
 
-        // Advance cursor only after successful apply (up to last success if error occurred)
+        // Advance to the last attempted seq so one bad row cannot pin the
+        // receive cursor forever. Each change remains idempotent.
         if (actualNewSeq > cursor) {
           await cursorManager.advanceReceiveCursor(
             remoteDeviceId: peer.deviceId,
@@ -346,20 +378,23 @@ class SyncManager {
           );
           cursor = actualNewSeq;
         }
-        
+
         pagesProcessed++;
-        debugPrint('[SyncManager]: ← pulled page $pagesProcessed: ${changes.length} changes, cursor now $cursor');
+        debugPrint(
+            '[SyncManager]: ← pulled page $pagesProcessed: ${changes.length} changes, cursor now $cursor');
 
         if (result.errors > 0) {
-          debugPrint('[SyncManager]: ← stopping PULL due to ${result.errors} errors');
-          break;
+          debugPrint(
+              '[SyncManager]: ← PULL page had ${result.errors} error(s); '
+              'continuing with the next page if available');
         }
       }
 
       if (!hasMore || changes.isEmpty) break;
     }
 
-    debugPrint('[SyncManager]: ← PULL complete: $totalReceived changes from ${peer.deviceId}');
+    debugPrint(
+        '[SyncManager]: ← PULL complete: $totalReceived changes from ${peer.deviceId}');
     return _PhaseResult(totalReceived, totalErrors);
   }
 
@@ -381,16 +416,22 @@ class SyncManager {
       final batch = await journal.getChangesSince(fromSeq, limit: _batchSize);
       if (batch.isEmpty) break;
 
-      final url = Uri.parse('http://${peer.lastKnownIp}:${peer.lastKnownPort}/sync/v2/push');
+      final url = Uri.parse(
+          'http://${peer.lastKnownIp}:${peer.lastKnownPort}/sync/v2/push');
 
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'senderDeviceId': localDeviceId,
-          'changes': batch.map((c) => c.toJson()).toList(),
-        }),
-      ).timeout(const Duration(seconds: 30));
+      final response = await http
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'x-device-id': localDeviceId,
+            },
+            body: jsonEncode({
+              'senderDeviceId': localDeviceId,
+              'changes': batch.map((c) => c.toJson()).toList(),
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) {
         throw Exception('PUSH HTTP ${response.statusCode}: ${response.body}');
@@ -433,7 +474,8 @@ class SyncManager {
         await journal.markAcknowledged(idsToAck);
       }
 
-      debugPrint('[SyncManager]: → pushed batch to ${peer.deviceId}, cursor=$fromSeq, errors=$errors');
+      debugPrint(
+          '[SyncManager]: → pushed batch to ${peer.deviceId}, cursor=$fromSeq, errors=$errors');
 
       if (errors > 0) {
         totalErrors += errors;
@@ -443,7 +485,8 @@ class SyncManager {
       if (batch.length < _batchSize) break; // last page
     }
 
-    debugPrint('[SyncManager]: → PUSH complete: $totalSent changes to ${peer.deviceId}');
+    debugPrint(
+        '[SyncManager]: → PUSH complete: $totalSent changes to ${peer.deviceId}');
     return _PhaseResult(totalSent, totalErrors);
   }
 }

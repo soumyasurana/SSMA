@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
-import 'package:ssma/main.dart' show syncInitializer;
 
 import 'package:ssma/models/customer.dart';
 import 'package:ssma/models/customer_payment.dart';
@@ -22,6 +21,7 @@ import 'package:ssma/sync/v2/models/sync_change_log.dart';
 import 'package:ssma/sync/v2/models/peer_device.dart';
 import 'package:ssma/sync/v2/models/sync_cursor.dart';
 import 'package:ssma/sync/v2/models/pairing_request.dart';
+import 'package:ssma/sync/v2/services/change_journal.dart';
 import 'package:ssma/sync/v2/sync_initializer_v2.dart' show syncV2;
 
 class DBService {
@@ -44,7 +44,7 @@ class DBService {
     String? entityUuid,
     int entityVersion = 1,
   }) async {
-    final deviceId = syncInitializer?.deviceId ?? syncV2?.deviceId ?? 'unknown';
+    final deviceId = syncV2?.deviceId ?? 'unknown';
 
     // Auto-extract entity UUID from the payload if not explicitly supplied.
     // All entity toJson() methods emit the UUID as the 'id' field.
@@ -65,7 +65,8 @@ class DBService {
     }
 
     // ── Legacy v1 ChangeLog ──────────────────────────────────────────────────
-    final maxLog = await isar.changeLogs.where().sortByChangeSeqDesc().findFirst();
+    final maxLog =
+        await isar.changeLogs.where().sortByChangeSeqDesc().findFirst();
     final nextSeq = (maxLog?.changeSeq ?? 0) + 1;
     final log = ChangeLog()
       ..opId = _uuid.v4()
@@ -89,9 +90,7 @@ class DBService {
         payload: payload,
       );
     }
-
   }
-
 
   static Future<void> _putProductSafe(Product product) async {
     final uuidValue = product.uuid.trim();
@@ -115,8 +114,10 @@ class DBService {
     // Fail startup if multiple Isar instances are detected before we open ours.
     if (Isar.instanceNames.isNotEmpty) {
       final names = Isar.instanceNames;
-      debugPrint('Isar Architecture Audit [ERROR]: Multiple Isar instances detected: $names');
-      throw StateError('Isar Architecture Audit Failed: Multiple Isar instances detected: $names');
+      debugPrint(
+          'Isar Architecture Audit [ERROR]: Multiple Isar instances detected: $names');
+      throw StateError(
+          'Isar Architecture Audit Failed: Multiple Isar instances detected: $names');
     }
 
     final dir = await getApplicationDocumentsDirectory();
@@ -146,14 +147,91 @@ class DBService {
     // Fail startup if multiple Isar instances are detected after open
     if (Isar.instanceNames.length > 1) {
       final names = Isar.instanceNames;
-      debugPrint('Isar Architecture Audit [ERROR]: Multiple Isar instances detected after open: $names');
-      throw StateError('Isar Architecture Audit Failed: Multiple Isar instances detected after open: $names');
+      debugPrint(
+          'Isar Architecture Audit [ERROR]: Multiple Isar instances detected after open: $names');
+      throw StateError(
+          'Isar Architecture Audit Failed: Multiple Isar instances detected after open: $names');
     }
 
-    debugPrint('Isar Architecture Audit: Shared Isar instance initialized (hashCode=${_isarInstance.hashCode}, name=${_isarInstance?.name}, openInstances=${Isar.instanceNames})');
-    
+    debugPrint(
+        'Isar Architecture Audit: Shared Isar instance initialized (hashCode=${_isarInstance.hashCode}, name=${_isarInstance?.name}, openInstances=${Isar.instanceNames})');
+
     // Run duplicate/stale peer cleanup migration
     await cleanupDuplicateAndStalePeers();
+  }
+
+  /// Backfills the v2 journal with CREATE entries for any legacy entity rows
+  /// that predate the new sync engine.
+  ///
+  /// This is intentionally idempotent: if a row already has a CREATE entry
+  /// for its UUID, it is skipped.
+  static Future<void> backfillSyncV2Journal(ChangeJournal journal) async {
+    debugPrint('DBService [V2 BACKFILL]: Starting journal backfill...');
+
+    await _backfillTable<Product>(
+      entityType: 'Product',
+      journal: journal,
+      fetchRows: () => isar.products.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    await _backfillTable<Customer>(
+      entityType: 'Customer',
+      journal: journal,
+      fetchRows: () => isar.customers.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    await _backfillTable<Supplier>(
+      entityType: 'Supplier',
+      journal: journal,
+      fetchRows: () => isar.suppliers.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    await _backfillTable<Sale>(
+      entityType: 'Sale',
+      journal: journal,
+      fetchRows: () => isar.sales.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    await _backfillTable<Purchase>(
+      entityType: 'Purchase',
+      journal: journal,
+      fetchRows: () => isar.purchases.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    await _backfillTable<CustomerPayment>(
+      entityType: 'CustomerPayment',
+      journal: journal,
+      fetchRows: () => isar.customerPayments.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    await _backfillTable<SupplierPayment>(
+      entityType: 'SupplierPayment',
+      journal: journal,
+      fetchRows: () => isar.supplierPayments.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    debugPrint('DBService [V2 BACKFILL]: Journal backfill complete');
   }
 
   static Isar get isar {
@@ -187,9 +265,9 @@ class DBService {
         entityUuid: product.uuid,
         entityVersion: product.version,
       );
-      debugPrint('[SYNC_OP]: v2 CREATE journal entry for product uuid=${product.uuid}');
+      debugPrint(
+          '[SYNC_OP]: v2 CREATE journal entry for product uuid=${product.uuid}');
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
     syncV2?.triggerDebouncedSync();
   }
 
@@ -205,9 +283,9 @@ class DBService {
         entityUuid: product.uuid,
         entityVersion: product.version,
       );
-      debugPrint('[SYNC_OP]: v2 UPDATE journal entry for product uuid=${product.uuid}');
+      debugPrint(
+          '[SYNC_OP]: v2 UPDATE journal entry for product uuid=${product.uuid}');
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
     syncV2?.triggerDebouncedSync();
   }
 
@@ -232,9 +310,9 @@ class DBService {
         entityUuid: product.uuid,
         entityVersion: product.version,
       );
-      debugPrint('[SYNC_OP]: v2 DELETE (soft) journal entry for product uuid=$productUuid');
+      debugPrint(
+          '[SYNC_OP]: v2 DELETE (soft) journal entry for product uuid=$productUuid');
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
     syncV2?.triggerDebouncedSync();
   }
 
@@ -254,7 +332,7 @@ class DBService {
         );
       }
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<Product?> getProductById(int id) async {
@@ -283,7 +361,7 @@ class DBService {
         recordId: customer.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> updateCustomer(Customer customer) async {
@@ -297,7 +375,7 @@ class DBService {
         recordId: customer.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> deleteCustomer(String customerUuid) async {
@@ -321,7 +399,7 @@ class DBService {
         recordId: customer.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<Customer?> getCustomerById(int id) async {
@@ -338,7 +416,7 @@ class DBService {
         recordId: payment.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> deleteCustomerPayment(int paymentIsarId) async {
@@ -378,7 +456,7 @@ class DBService {
         recordId: payment.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<List<CustomerPayment>> getCustomerPaymentsByCustomerUuid(
@@ -423,13 +501,15 @@ class DBService {
             }
           }
 
-          if (oldSale.saleType == SaleType.credit && oldSale.customerUuid != null) {
+          if (oldSale.saleType == SaleType.credit &&
+              oldSale.customerUuid != null) {
             final customer = await isar.customers
                 .filter()
                 .uuidEqualTo(oldSale.customerUuid!)
                 .findFirst();
             if (customer != null) {
-              customer.pendingDues -= (oldSale.totalAmount - oldSale.amountReceived);
+              customer.pendingDues -=
+                  (oldSale.totalAmount - oldSale.amountReceived);
               if (customer.pendingDues < 0) {
                 customer.pendingDues = 0;
               }
@@ -509,7 +589,7 @@ class DBService {
         recordId: sale.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> updateSale(Sale sale) async {
@@ -524,7 +604,7 @@ class DBService {
         recordId: sale.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<Sale?> getSaleById(int id) async {
@@ -591,7 +671,7 @@ class DBService {
         );
       }
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<List<Sale>> getAllSales() async {
@@ -658,7 +738,7 @@ class DBService {
         recordId: sale.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<List<SaleItem>> getSaleItemsForSaleId(int saleId) async {
@@ -721,7 +801,7 @@ class DBService {
         }
       }
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> updateSalePaymentByUuid({
@@ -751,7 +831,7 @@ class DBService {
         recordId: customer.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> updateCustomerDuesByUuid(
@@ -777,7 +857,7 @@ class DBService {
         recordId: customer.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> addSupplier(Supplier supplier) async {
@@ -790,7 +870,7 @@ class DBService {
         recordId: supplier.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> updateSupplier(Supplier supplier) async {
@@ -807,7 +887,7 @@ class DBService {
         recordId: supplier.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> deleteSupplier(String supplierUuid) async {
@@ -830,7 +910,7 @@ class DBService {
         recordId: supplier.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> deleteSupplierByIsarId(int id) async {
@@ -850,7 +930,7 @@ class DBService {
         );
       }
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<List<Supplier>> getSuppliers() async {
@@ -894,7 +974,7 @@ class DBService {
         }
       }
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> updatePurchase(Purchase purchase) async {
@@ -909,7 +989,7 @@ class DBService {
         recordId: purchase.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> deletePurchase(int id) async {
@@ -929,14 +1009,15 @@ class DBService {
         );
       }
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<List<Purchase>> getAllPurchases() async {
     return isar.purchases.where().sortByDateDesc().findAll();
   }
 
-  static Future<List<Purchase>> getPurchasesBySupplier(String supplierUuid) async {
+  static Future<List<Purchase>> getPurchasesBySupplier(
+      String supplierUuid) async {
     return isar.purchases
         .filter()
         .supplierUuidEqualTo(supplierUuid)
@@ -954,7 +1035,7 @@ class DBService {
         recordId: payment.isarId,
       );
     });
-    syncInitializer?.syncEngine.triggerDebouncedSync();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<List<SupplierPayment>> getSupplierPayments(
@@ -1008,7 +1089,8 @@ class DBService {
   }
 
   static Future<void> cleanupDuplicateAndStalePeers() async {
-    debugPrint('DBService [CLEANUP]: Starting peer cleanup and migration (isarHash=${isar.hashCode})...');
+    debugPrint(
+        'DBService [CLEANUP]: Starting peer cleanup and migration (isarHash=${isar.hashCode})...');
     try {
       final peers = await isar.peerStates.where().findAll();
       final Map<String, PeerState> uniquePeersByIp = {};
@@ -1022,7 +1104,8 @@ class DBService {
         if (uniquePeersByIp.containsKey(peer.peerIp)) {
           // This is a duplicate peer with the same IP but a different peerId (likely from a previous app start with a different transient device ID)
           idsToDelete.add(peer.id);
-          debugPrint('DBService [CLEANUP]: Found duplicate peer record to delete: id=${peer.id}, peerId=${peer.peerId}, ip=${peer.peerIp}');
+          debugPrint(
+              'DBService [CLEANUP]: Found duplicate peer record to delete: id=${peer.id}, peerId=${peer.peerId}, ip=${peer.peerIp}');
         } else {
           uniquePeersByIp[peer.peerIp] = peer;
         }
@@ -1031,11 +1114,14 @@ class DBService {
       // ✅ FIX: Use 30-day threshold (matching compaction retention) instead of 24h.
       // Deleting peers after 24h on every app restart wipes their lastPulledChangeSeq,
       // forcing a full re-sync every time a device is offline for more than a day.
-      final cutoff = DateTime.now().subtract(const Duration(days: 30)).millisecondsSinceEpoch;
+      final cutoff = DateTime.now()
+          .subtract(const Duration(days: 30))
+          .millisecondsSinceEpoch;
       for (final peer in sortedPeers) {
         if (peer.lastSeen < cutoff && !idsToDelete.contains(peer.id)) {
           idsToDelete.add(peer.id);
-          debugPrint('DBService [CLEANUP]: Found stale peer record to delete (last seen > 30d ago): id=${peer.id}, peerId=${peer.peerId}, ip=${peer.peerIp}');
+          debugPrint(
+              'DBService [CLEANUP]: Found stale peer record to delete (last seen > 30d ago): id=${peer.id}, peerId=${peer.peerId}, ip=${peer.peerIp}');
         }
       }
 
@@ -1043,12 +1129,57 @@ class DBService {
         await isar.writeTxn(() async {
           await isar.peerStates.deleteAll(idsToDelete);
         });
-        debugPrint('DBService [CLEANUP]: Successfully deleted ${idsToDelete.length} stale/duplicate peer records (isarHash=${isar.hashCode})');
+        debugPrint(
+            'DBService [CLEANUP]: Successfully deleted ${idsToDelete.length} stale/duplicate peer records (isarHash=${isar.hashCode})');
       } else {
-        debugPrint('DBService [CLEANUP]: No stale/duplicate peer records found to clean up');
+        debugPrint(
+            'DBService [CLEANUP]: No stale/duplicate peer records found to clean up');
       }
     } catch (e, st) {
-      debugPrint('DBService [CLEANUP]: ❌ Failed to run peer cleanup migration: $e\n$st');
+      debugPrint(
+          'DBService [CLEANUP]: ❌ Failed to run peer cleanup migration: $e\n$st');
     }
+  }
+
+  static Future<void> _backfillTable<T>({
+    required String entityType,
+    required ChangeJournal journal,
+    required Future<List<T>> Function() fetchRows,
+    required String Function(T row) entityId,
+    required int Function(T row) entityVersion,
+    required Map<String, dynamic> Function(T row) payload,
+  }) async {
+    await isar.writeTxn(() async {
+      final existingCreates = await isar.syncChangeLogs
+          .filter()
+          .entityTypeEqualTo(entityType)
+          .and()
+          .operationEqualTo('CREATE')
+          .findAll();
+      final existingEntityIds =
+          existingCreates.map((entry) => entry.entityId).toSet();
+
+      final rows = await fetchRows();
+      int appended = 0;
+
+      for (final row in rows) {
+        final id = entityId(row);
+        if (id.isEmpty || existingEntityIds.contains(id)) {
+          continue;
+        }
+
+        await journal.append(
+          entityType: entityType,
+          entityId: id,
+          operation: 'CREATE',
+          entityVersion: entityVersion(row),
+          payload: payload(row),
+        );
+        appended++;
+      }
+
+      debugPrint(
+          'DBService [V2 BACKFILL]: $entityType appended $appended CREATE entr${appended == 1 ? 'y' : 'ies'}');
+    });
   }
 }

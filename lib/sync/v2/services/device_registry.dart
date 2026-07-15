@@ -39,7 +39,8 @@ class DeviceRegistry {
     PeerDevice? device;
 
     await isar.writeTxn(() async {
-      device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
 
       if (device == null) {
         device = PeerDevice()
@@ -55,7 +56,8 @@ class DeviceRegistry {
           ..registeredAtMs = DateTime.now().millisecondsSinceEpoch
           ..osVersion = osVersion;
 
-        debugPrint('[DeviceRegistry]: ✨ new device registered: $deviceId ($deviceName)');
+        debugPrint(
+            '[DeviceRegistry]: ✨ new device registered: $deviceId ($deviceName)');
       } else {
         device!.lastKnownIp = ip;
         device!.lastKnownPort = port;
@@ -99,8 +101,32 @@ class DeviceRegistry {
 
   Future<void> setConnectionStatus(String deviceId, String status) async {
     await isar.writeTxn(() async {
-      final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
       if (device != null) {
+        device.connectionStatus = status;
+        device.lastSeenMs = DateTime.now().millisecondsSinceEpoch;
+        await isar.peerDevices.put(device);
+      }
+    });
+  }
+
+  /// Refreshes the stored network endpoint for a peer after a successful
+  /// reachability check or re-discovery.
+  Future<void> refreshConnection({
+    required String deviceId,
+    required String ip,
+    required int port,
+    String status = 'reachable',
+  }) async {
+    await isar.writeTxn(() async {
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      if (device != null) {
+        if (ip.isNotEmpty) {
+          device.lastKnownIp = ip;
+        }
+        device.lastKnownPort = port;
         device.connectionStatus = status;
         device.lastSeenMs = DateTime.now().millisecondsSinceEpoch;
         await isar.peerDevices.put(device);
@@ -110,7 +136,8 @@ class DeviceRegistry {
 
   Future<void> markLastSync(String deviceId) async {
     await isar.writeTxn(() async {
-      final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
       if (device != null) {
         device.lastSyncMs = DateTime.now().millisecondsSinceEpoch;
         await isar.peerDevices.put(device);
@@ -125,14 +152,16 @@ class DeviceRegistry {
   /// Marks a device as paired and trusted.
   Future<void> pairDevice(String deviceId) async {
     await isar.writeTxn(() async {
-      final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
       if (device != null) {
         device.isPaired = true;
         device.pairedAtMs = DateTime.now().millisecondsSinceEpoch;
         await isar.peerDevices.put(device);
         debugPrint('[DeviceRegistry]: ✅ Device $deviceId is now paired');
       } else {
-        debugPrint('[DeviceRegistry]: ⚠ pairDevice($deviceId) called but device is not in the registry yet — call upsertDevice first');
+        debugPrint(
+            '[DeviceRegistry]: ⚠ pairDevice($deviceId) called but device is not in the registry yet — call upsertDevice first');
       }
     });
   }
@@ -140,7 +169,8 @@ class DeviceRegistry {
   /// Removes trust from a device. Sync will be refused until re-paired.
   Future<void> unpairDevice(String deviceId) async {
     await isar.writeTxn(() async {
-      final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
       if (device != null) {
         device.isPaired = false;
         device.pairedAtMs = null;
@@ -153,18 +183,56 @@ class DeviceRegistry {
   /// Removes a device entirely from the registry.
   Future<void> removeDevice(String deviceId) async {
     await isar.writeTxn(() async {
-      final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
       if (device != null) {
         await isar.peerDevices.delete(device.id);
-        debugPrint('[DeviceRegistry]: 🗑 Device $deviceId removed from registry');
+        debugPrint(
+            '[DeviceRegistry]: 🗑 Device $deviceId removed from registry');
       }
     });
+  }
+
+  /// Resolves our own outbound pairing request to [targetDeviceId] once the
+  /// peer's accept/reject decision arrives via a pair/respond callback.
+  ///
+  /// Unlike [respondToPairingRequest] (used for *inbound* requests, matched
+  /// by requestId — a value we generated locally), outbound requests must be
+  /// matched by the responding peer's deviceId, since the peer has no way of
+  /// knowing the requestId we assigned to our own local record.
+  Future<void> resolveOutboundRequest(
+      String targetDeviceId, bool accepted) async {
+    await isar.writeTxn(() async {
+      final request = await isar.pairingRequests
+          .filter()
+          .isInitiatorEqualTo(true)
+          .and()
+          .targetDeviceIdEqualTo(targetDeviceId)
+          .and()
+          .statusEqualTo('pending')
+          .findFirst();
+
+      if (request == null) {
+        debugPrint(
+            '[DeviceRegistry]: ⚠ resolveOutboundRequest($targetDeviceId) — no matching pending outbound request found');
+        return;
+      }
+
+      request.status = accepted ? 'accepted' : 'rejected';
+      request.respondedAtMs = DateTime.now().millisecondsSinceEpoch;
+      await isar.pairingRequests.put(request);
+    });
+
+    if (accepted) {
+      await pairDevice(targetDeviceId);
+    }
   }
 
   /// Renames a paired device.
   Future<void> renameDevice(String deviceId, String newName) async {
     await isar.writeTxn(() async {
-      final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
       if (device != null) {
         device.deviceName = newName;
         await isar.peerDevices.put(device);
@@ -183,7 +251,8 @@ class DeviceRegistry {
     bool? autoSyncEnabled,
   }) async {
     await isar.writeTxn(() async {
-      final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+      final device =
+          await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
       if (device != null) {
         if (receiveEnabled != null) device.receiveEnabled = receiveEnabled;
         if (sendEnabled != null) device.sendEnabled = sendEnabled;
@@ -273,7 +342,8 @@ class DeviceRegistry {
 
   /// Returns true if [deviceId] is currently paired and trusted.
   Future<bool> isTrusted(String deviceId) async {
-    final device = await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
+    final device =
+        await isar.peerDevices.filter().deviceIdEqualTo(deviceId).findFirst();
     return device?.isPaired ?? false;
   }
 }

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:ssma/sync/sync_initializer.dart';
-import 'package:ssma/sync/sync_status.dart';
-import 'package:ssma/main.dart'; // To access syncInitializer
+import 'package:ssma/sync/v2/sync_initializer_v2.dart';
+import 'package:ssma/sync/v2/services/sync_manager.dart' show SyncStatusV2;
 import 'package:ssma/screens/sync_settings_screen_v2.dart';
 
 class SyncIndicator extends StatelessWidget {
@@ -9,32 +8,32 @@ class SyncIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (syncInitializer == null) {
+    if (syncV2 == null) {
       return const SizedBox.shrink();
     }
 
     return ListenableBuilder(
-      listenable: syncInitializer!.statusNotifier,
+      listenable: syncV2!.statusNotifier,
       builder: (context, _) {
-        final status = syncInitializer!.statusNotifier.status;
+        final status = syncV2!.statusNotifier.status;
 
         IconData icon;
         Color color;
 
         switch (status) {
-          case SyncStatus.idle:
+          case SyncStatusV2.idle:
             icon = Icons.cloud_done;
             color = Colors.green;
             break;
-          case SyncStatus.syncing:
+          case SyncStatusV2.syncing:
             icon = Icons.sync;
             color = Colors.blue;
             break;
-          case SyncStatus.offline:
+          case SyncStatusV2.offline:
             icon = Icons.cloud_off;
             color = Colors.grey;
             break;
-          case SyncStatus.error:
+          case SyncStatusV2.error:
             icon = Icons.error;
             color = Colors.red;
             break;
@@ -42,7 +41,7 @@ class SyncIndicator extends StatelessWidget {
 
         return IconButton(
           icon: Icon(icon, color: color),
-          tooltip: 'Sync Status: \${status.name}',
+          tooltip: 'Sync Status: ${status.name}',
           onPressed: () {
             Navigator.push(
               context,

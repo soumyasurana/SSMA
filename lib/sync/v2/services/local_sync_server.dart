@@ -8,7 +8,6 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 
 import '../models/sync_change_log.dart';
-import '../models/pairing_request.dart';
 import 'change_journal.dart';
 import 'change_processor.dart';
 import 'cursor_manager.dart';
@@ -72,7 +71,8 @@ class LocalSyncServer {
         .addHandler(router.call);
 
     _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
-    debugPrint('[LocalSyncServer]: ✅ listening on ${_server!.address.address}:${_server!.port}');
+    debugPrint(
+        '[LocalSyncServer]: ✅ listening on ${_server!.address.address}:${_server!.port}');
   }
 
   Future<void> stop() async {
@@ -101,14 +101,17 @@ class LocalSyncServer {
         // All other routes require the caller to be a trusted peer
         final senderDeviceId = request.headers['x-device-id'];
         if (senderDeviceId == null) {
-          return Response.forbidden(jsonEncode({'error': 'Missing x-device-id header'}),
+          return Response.forbidden(
+              jsonEncode({'error': 'Missing x-device-id header'}),
               headers: {'Content-Type': 'application/json'});
         }
 
         final trusted = await deviceRegistry.isTrusted(senderDeviceId);
         if (!trusted) {
-          debugPrint('[LocalSyncServer]: ⛔ rejected request from untrusted $senderDeviceId');
-          return Response.forbidden(jsonEncode({'error': 'Device not paired — pairing required'}),
+          debugPrint(
+              '[LocalSyncServer]: ⛔ rejected request from untrusted $senderDeviceId');
+          return Response.forbidden(
+              jsonEncode({'error': 'Device not paired — pairing required'}),
               headers: {'Content-Type': 'application/json'});
         }
 
@@ -140,13 +143,14 @@ class LocalSyncServer {
 
   Future<Response> _handshakeHandler(Request request) async {
     try {
-      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
       final peerDeviceId = body['deviceId'] as String?;
       final peerProtocol = body['protocolVersion'] as int? ?? 1;
-      final peerAppVersion = body['appVersion'] as String? ?? '0.0.0';
 
       if (peerDeviceId == null) {
-        return Response.badRequest(body: jsonEncode({'error': 'deviceId required'}),
+        return Response.badRequest(
+            body: jsonEncode({'error': 'deviceId required'}),
             headers: {'Content-Type': 'application/json'});
       }
 
@@ -184,8 +188,10 @@ class LocalSyncServer {
   // -----------------------------------------------------------------------
 
   Future<Response> _pullHandler(Request request) async {
-    final since = int.tryParse(request.url.queryParameters['since'] ?? '0') ?? 0;
-    final limit = int.tryParse(request.url.queryParameters['limit'] ?? '200') ?? 200;
+    final since =
+        int.tryParse(request.url.queryParameters['since'] ?? '0') ?? 0;
+    final limit =
+        int.tryParse(request.url.queryParameters['limit'] ?? '200') ?? 200;
     final effectiveLimit = limit.clamp(1, 500);
 
     final changes = await journal.getChangesSince(since, limit: effectiveLimit);
@@ -208,12 +214,14 @@ class LocalSyncServer {
 
   Future<Response> _pushHandler(Request request) async {
     try {
-      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
       final senderDeviceId = body['senderDeviceId'] as String?;
       final rawChanges = body['changes'] as List<dynamic>? ?? [];
 
       if (senderDeviceId == null) {
-        return Response.badRequest(body: jsonEncode({'error': 'senderDeviceId required'}),
+        return Response.badRequest(
+            body: jsonEncode({'error': 'senderDeviceId required'}),
             headers: {'Content-Type': 'application/json'});
       }
 
@@ -221,7 +229,10 @@ class LocalSyncServer {
       final peer = await deviceRegistry.getDevice(senderDeviceId);
       if (peer != null && !peer.receiveEnabled) {
         return Response.forbidden(
-            jsonEncode({'error': 'receive_disabled — this device has disabled receiving from you'}),
+            jsonEncode({
+              'error':
+                  'receive_disabled — this device has disabled receiving from you'
+            }),
             headers: {'Content-Type': 'application/json'});
       }
 
@@ -253,20 +264,23 @@ class LocalSyncServer {
 
   Future<Response> _pairRequestHandler(Request request) async {
     try {
-      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
       final initiatorDeviceId = body['deviceId'] as String?;
       final initiatorName = body['deviceName'] as String? ?? 'Unknown';
       final initiatorPlatform = body['platform'] as String? ?? 'unknown';
       final initiatorAppVersion = body['appVersion'] as String? ?? '0.0.0';
       final initiatorPort = body['port'] as int?;
-      
-      final connInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+
+      final connInfo =
+          request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
       final initiatorIp = request.headers['x-forwarded-for'] ??
           connInfo?.remoteAddress.address ??
           'unknown';
 
       if (initiatorDeviceId == null) {
-        return Response.badRequest(body: jsonEncode({'error': 'deviceId required'}),
+        return Response.badRequest(
+            body: jsonEncode({'error': 'deviceId required'}),
             headers: {'Content-Type': 'application/json'});
       }
 
@@ -287,7 +301,8 @@ class LocalSyncServer {
         initiatorPort: initiatorPort,
       );
 
-      debugPrint('[LocalSyncServer]: 🔔 Pairing request from $initiatorDeviceId ($initiatorName)');
+      debugPrint(
+          '[LocalSyncServer]: 🔔 Pairing request from $initiatorDeviceId ($initiatorName)');
 
       return _json({
         'status': 'pending',
@@ -306,27 +321,18 @@ class LocalSyncServer {
 
   Future<Response> _pairRespondHandler(Request request) async {
     try {
-      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
-      final requestId = body['requestId'] as String?;
-      final accepted = body['accepted'] as bool? ?? false;
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final responderDeviceId = body['deviceId'] as String?;
+      final accepted = body['accept'] as bool? ?? false; // matches sender's key
 
-      if (requestId == null) {
-        return Response.badRequest(body: jsonEncode({'error': 'requestId required'}),
+      if (responderDeviceId == null) {
+        return Response.badRequest(
+            body: jsonEncode({'error': 'deviceId required'}),
             headers: {'Content-Type': 'application/json'});
       }
 
-      await deviceRegistry.respondToPairingRequest(requestId, accepted);
-
-      if (accepted) {
-        // Look up the pairing request to find the initiator device ID
-        final pairingReq = await isar.pairingRequests
-            .filter()
-            .requestIdEqualTo(requestId)
-            .findFirst();
-        if (pairingReq != null) {
-          await deviceRegistry.pairDevice(pairingReq.initiatorDeviceId);
-        }
-      }
+      await deviceRegistry.resolveOutboundRequest(responderDeviceId, accepted);
 
       return _json({'status': accepted ? 'accepted' : 'rejected'});
     } catch (e) {

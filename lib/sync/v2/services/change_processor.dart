@@ -21,10 +21,10 @@ import 'change_journal.dart';
 /// Statistics returned after processing a batch of incoming changes.
 class ChangeProcessorResult {
   final int applied;
-  final int skipped;   // duplicates (same changeId already stored)
+  final int skipped; // duplicates (same changeId already stored)
   final int conflicts; // resolved conflicts (applied or rejected)
-  final int errors;    // unknown entity types or unexpected exceptions
-  final int lastProcessedSeq; // last successfully processed change sequence
+  final int errors; // unknown entity types or unexpected exceptions
+  final int lastProcessedSeq; // last attempted change sequence in the batch
 
   const ChangeProcessorResult({
     required this.applied,
@@ -87,7 +87,8 @@ class EntityRegistry {
   /// Registers a handler, overwriting any existing handler for the same type.
   static void register(EntitySyncHandler handler) {
     _handlers[handler.entityType] = handler;
-    debugPrint('[EntityRegistry]: registered handler for "${handler.entityType}"');
+    debugPrint(
+        '[EntityRegistry]: registered handler for "${handler.entityType}"');
   }
 
   /// Returns the handler for [entityType], or null if not registered.
@@ -132,7 +133,8 @@ class ChangeProcessor {
   });
 
   /// Processes a batch of incoming changes and returns aggregate statistics.
-  Future<ChangeProcessorResult> processBatch(List<SyncChangeLog> changes) async {
+  Future<ChangeProcessorResult> processBatch(
+      List<SyncChangeLog> changes) async {
     int applied = 0, skipped = 0, conflicts = 0, errors = 0;
     int lastProcessedSeq = -1;
 
@@ -141,28 +143,31 @@ class ChangeProcessor {
         final result = await _processSingle(change);
         if (result == _ApplyResult.unknownType) {
           errors++;
-          debugPrint('[ChangeProcessor]: ⚠ no handler for entityType="${change.entityType}"');
-          break;
+          debugPrint(
+              '[ChangeProcessor]: ⚠ no handler for entityType="${change.entityType}"');
+        } else {
+          switch (result) {
+            case _ApplyResult.applied:
+              applied++;
+              break;
+            case _ApplyResult.duplicate:
+              skipped++;
+              break;
+            case _ApplyResult.conflict:
+              conflicts++;
+              break;
+            case _ApplyResult.unknownType:
+              break;
+          }
         }
-
-        switch (result) {
-          case _ApplyResult.applied:
-            applied++;
-            break;
-          case _ApplyResult.duplicate:
-            skipped++;
-            break;
-          case _ApplyResult.conflict:
-            conflicts++;
-            break;
-          case _ApplyResult.unknownType:
-            break;
-        }
-        lastProcessedSeq = change.changeSeq;
       } catch (e, st) {
         errors++;
-        debugPrint('[ChangeProcessor]: ❌ error on changeId=${change.changeId}: $e\n$st');
-        break;
+        debugPrint(
+            '[ChangeProcessor]: ❌ error on changeId=${change.changeId}: $e\n$st');
+      } finally {
+        // Keep moving forward so one malformed row does not stall the entire
+        // batch on every retry.
+        lastProcessedSeq = change.changeSeq;
       }
     }
 
@@ -200,7 +205,8 @@ class ChangeProcessor {
 
       // Apply the entity change via the handler
       final payload = jsonDecode(change.payload) as Map<String, dynamic>;
-      final applyOutcome = await handler.applyChange(payload, change.operation, conflictResolver, isar);
+      final applyOutcome = await handler.applyChange(
+          payload, change.operation, conflictResolver, isar);
       if (applyOutcome == false) {
         result = _ApplyResult.conflict;
       }
@@ -233,7 +239,8 @@ class ProductSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = Product.fromJson(payload);
-    final existing = await isar.products.filter().uuidEqualTo(incoming.uuid).findFirst();
+    final existing =
+        await isar.products.filter().uuidEqualTo(incoming.uuid).findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;
@@ -251,10 +258,15 @@ class ProductSyncHandler implements EntitySyncHandler {
       return true;
     }
 
-    if (conflictResolver.shouldApplyIncoming(_makeCtx(entityType, incoming.uuid,
-        incoming.version, existing.version,
-        incoming.updatedAt.millisecondsSinceEpoch, existing.updatedAt.millisecondsSinceEpoch,
-        incoming.deviceId, existing.deviceId))) {
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
       incoming
         ..isarId = existing.isarId
         ..isSynced = true;
@@ -279,7 +291,8 @@ class CustomerSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = Customer.fromJson(payload);
-    final existing = await isar.customers.filter().uuidEqualTo(incoming.uuid).findFirst();
+    final existing =
+        await isar.customers.filter().uuidEqualTo(incoming.uuid).findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;
@@ -297,10 +310,15 @@ class CustomerSyncHandler implements EntitySyncHandler {
       return true;
     }
 
-    if (conflictResolver.shouldApplyIncoming(_makeCtx(entityType, incoming.uuid,
-        incoming.version, existing.version,
-        incoming.updatedAt.millisecondsSinceEpoch, existing.updatedAt.millisecondsSinceEpoch,
-        incoming.deviceId, existing.deviceId))) {
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
       incoming
         ..isarId = existing.isarId
         ..isSynced = true;
@@ -325,7 +343,8 @@ class SupplierSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = Supplier.fromJson(payload);
-    final existing = await isar.suppliers.filter().uuidEqualTo(incoming.uuid).findFirst();
+    final existing =
+        await isar.suppliers.filter().uuidEqualTo(incoming.uuid).findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;
@@ -343,10 +362,15 @@ class SupplierSyncHandler implements EntitySyncHandler {
       return true;
     }
 
-    if (conflictResolver.shouldApplyIncoming(_makeCtx(entityType, incoming.uuid,
-        incoming.version, existing.version,
-        incoming.updatedAt.millisecondsSinceEpoch, existing.updatedAt.millisecondsSinceEpoch,
-        incoming.deviceId, existing.deviceId))) {
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
       incoming
         ..isarId = existing.isarId
         ..isSynced = true;
@@ -371,7 +395,8 @@ class SaleSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = Sale.fromJson(payload);
-    final existing = await isar.sales.filter().uuidEqualTo(incoming.uuid).findFirst();
+    final existing =
+        await isar.sales.filter().uuidEqualTo(incoming.uuid).findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;
@@ -389,10 +414,15 @@ class SaleSyncHandler implements EntitySyncHandler {
       return true;
     }
 
-    if (conflictResolver.shouldApplyIncoming(_makeCtx(entityType, incoming.uuid,
-        incoming.version, existing.version,
-        incoming.updatedAt.millisecondsSinceEpoch, existing.updatedAt.millisecondsSinceEpoch,
-        incoming.deviceId, existing.deviceId))) {
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
       incoming
         ..isarId = existing.isarId
         ..isSynced = true;
@@ -417,7 +447,8 @@ class PurchaseSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = Purchase.fromJson(payload);
-    final existing = await isar.purchases.filter().uuidEqualTo(incoming.uuid).findFirst();
+    final existing =
+        await isar.purchases.filter().uuidEqualTo(incoming.uuid).findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;
@@ -435,10 +466,15 @@ class PurchaseSyncHandler implements EntitySyncHandler {
       return true;
     }
 
-    if (conflictResolver.shouldApplyIncoming(_makeCtx(entityType, incoming.uuid,
-        incoming.version, existing.version,
-        incoming.updatedAt.millisecondsSinceEpoch, existing.updatedAt.millisecondsSinceEpoch,
-        incoming.deviceId, existing.deviceId))) {
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
       incoming
         ..isarId = existing.isarId
         ..isSynced = true;
@@ -463,7 +499,10 @@ class CustomerPaymentSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = CustomerPayment.fromJson(payload);
-    final existing = await isar.customerPayments.filter().uuidEqualTo(incoming.uuid).findFirst();
+    final existing = await isar.customerPayments
+        .filter()
+        .uuidEqualTo(incoming.uuid)
+        .findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;
@@ -481,10 +520,15 @@ class CustomerPaymentSyncHandler implements EntitySyncHandler {
       return true;
     }
 
-    if (conflictResolver.shouldApplyIncoming(_makeCtx(entityType, incoming.uuid,
-        incoming.version, existing.version,
-        incoming.updatedAt.millisecondsSinceEpoch, existing.updatedAt.millisecondsSinceEpoch,
-        incoming.deviceId, existing.deviceId))) {
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
       incoming
         ..isarId = existing.isarId
         ..isSynced = true;
@@ -509,7 +553,10 @@ class SupplierPaymentSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = SupplierPayment.fromJson(payload);
-    final existing = await isar.supplierPayments.filter().uuidEqualTo(incoming.uuid).findFirst();
+    final existing = await isar.supplierPayments
+        .filter()
+        .uuidEqualTo(incoming.uuid)
+        .findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;
@@ -527,10 +574,15 @@ class SupplierPaymentSyncHandler implements EntitySyncHandler {
       return true;
     }
 
-    if (conflictResolver.shouldApplyIncoming(_makeCtx(entityType, incoming.uuid,
-        incoming.version, existing.version,
-        incoming.updatedAt.millisecondsSinceEpoch, existing.updatedAt.millisecondsSinceEpoch,
-        incoming.deviceId, existing.deviceId))) {
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
       incoming
         ..isarId = existing.isarId
         ..isSynced = true;

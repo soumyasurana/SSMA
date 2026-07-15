@@ -60,10 +60,12 @@ class DeviceDiscoveryService {
     await _startDiscovery();
 
     // Periodic health checks every 15 seconds
-    _healthCheckTimer = Timer.periodic(const Duration(seconds: 15), (_) => _runHealthChecks());
+    _healthCheckTimer =
+        Timer.periodic(const Duration(seconds: 15), (_) => _runHealthChecks());
 
     // Periodic auto-sync every 30 seconds
-    _periodicSyncTimer = Timer.periodic(const Duration(seconds: 30), (_) => syncManager.syncWithAllPeers());
+    _periodicSyncTimer = Timer.periodic(
+        const Duration(seconds: 30), (_) => syncManager.syncWithAllPeers());
 
     // Subnet fallback after 20 seconds if no peers found
     Future.delayed(const Duration(seconds: 20), _subnetFallbackIfNeeded);
@@ -75,11 +77,15 @@ class DeviceDiscoveryService {
     _periodicSyncTimer?.cancel();
 
     if (_discovery != null) {
-      try { await nsd.stopDiscovery(_discovery!); } catch (_) {}
+      try {
+        await nsd.stopDiscovery(_discovery!);
+      } catch (_) {}
       _discovery = null;
     }
     if (_registration != null) {
-      try { await nsd.unregister(_registration!); } catch (_) {}
+      try {
+        await nsd.unregister(_registration!);
+      } catch (_) {}
       _registration = null;
     }
   }
@@ -108,7 +114,8 @@ class DeviceDiscoveryService {
           'protocolVersion': utf8.encode(_serviceVersion),
         },
       ));
-      debugPrint('[Discovery]: ✅ mDNS registered as "ssma2_$localDeviceId" on port $port');
+      debugPrint(
+          '[Discovery]: ✅ mDNS registered as "ssma2_$localDeviceId" on port $port');
     } catch (e, st) {
       debugPrint('[Discovery]: ❌ mDNS registration failed: $e\n$st');
     }
@@ -120,9 +127,11 @@ class DeviceDiscoveryService {
 
   Future<void> _startDiscovery() async {
     try {
-      _discovery = await nsd.startDiscovery(_serviceType, ipLookupType: nsd.IpLookupType.any);
+      _discovery = await nsd.startDiscovery(_serviceType,
+          ipLookupType: nsd.IpLookupType.any);
 
-      _discovery!.addListener(() => _handleDiscoveredServices(_discovery!.services));
+      _discovery!
+          .addListener(() => _handleDiscoveredServices(_discovery!.services));
       _handleDiscoveredServices(_discovery!.services);
 
       debugPrint('[Discovery]: ✅ mDNS discovery started for $_serviceType');
@@ -137,13 +146,17 @@ class DeviceDiscoveryService {
 
   Future<void> _restartDiscovery() async {
     if (_discovery != null) {
-      try { await nsd.stopDiscovery(_discovery!); } catch (_) {}
+      try {
+        await nsd.stopDiscovery(_discovery!);
+      } catch (_) {}
       _discovery = null;
     }
     await Future.delayed(const Duration(milliseconds: 500));
     try {
-      _discovery = await nsd.startDiscovery(_serviceType, ipLookupType: nsd.IpLookupType.any);
-      _discovery!.addListener(() => _handleDiscoveredServices(_discovery!.services));
+      _discovery = await nsd.startDiscovery(_serviceType,
+          ipLookupType: nsd.IpLookupType.any);
+      _discovery!
+          .addListener(() => _handleDiscoveredServices(_discovery!.services));
       _handleDiscoveredServices(_discovery!.services);
       debugPrint('[Discovery]: ✅ mDNS re-scan complete');
     } catch (e) {
@@ -163,14 +176,17 @@ class DeviceDiscoveryService {
   Future<void> _resolveAndRegister(nsd.Service service) async {
     try {
       nsd.Service resolved = service;
-      if (resolved.host == null || resolved.addresses == null || resolved.addresses!.isEmpty) {
+      if (resolved.host == null ||
+          resolved.addresses == null ||
+          resolved.addresses!.isEmpty) {
         resolved = await nsd.resolve(service);
       }
 
       String? ip = _extractIp(resolved);
       if (ip == null) {
         if (resolved.host != null && !_isIpAddress(resolved.host!)) {
-          final addrs = await InternetAddress.lookup(resolved.host!, type: InternetAddressType.IPv4);
+          final addrs = await InternetAddress.lookup(resolved.host!,
+              type: InternetAddressType.IPv4);
           if (addrs.isNotEmpty) ip = addrs.first.address;
         } else {
           ip = resolved.host;
@@ -184,8 +200,13 @@ class DeviceDiscoveryService {
       String _decodeTxt(String key, String fallback) {
         final bytes = txt[key];
         if (bytes == null) return fallback;
-        try { return utf8.decode(bytes); } catch (_) { return fallback; }
+        try {
+          return utf8.decode(bytes);
+        } catch (_) {
+          return fallback;
+        }
       }
+
       final remoteDeviceId = _decodeTxt('deviceId', service.name ?? 'unknown');
       final deviceName = _decodeTxt('deviceName', 'Unknown Device');
       final platform = _decodeTxt('platform', 'unknown');
@@ -203,7 +224,8 @@ class DeviceDiscoveryService {
       // Health check immediately after discovery
       await _checkPeerHealth(remoteDeviceId, ip, resolved.port!);
     } catch (e, st) {
-      debugPrint('[Discovery]: ❌ failed to resolve/register ${service.name}: $e\n$st');
+      debugPrint(
+          '[Discovery]: ❌ failed to resolve/register ${service.name}: $e\n$st');
     }
   }
 
@@ -215,7 +237,8 @@ class DeviceDiscoveryService {
     final devices = await deviceRegistry.getAllDevices();
     for (final device in devices) {
       if (device.lastKnownIp.isEmpty) continue;
-      await _checkPeerHealth(device.deviceId, device.lastKnownIp, device.lastKnownPort);
+      await _checkPeerHealth(
+          device.deviceId, device.lastKnownIp, device.lastKnownPort);
     }
   }
 
@@ -224,7 +247,12 @@ class DeviceDiscoveryService {
     try {
       final response = await http.get(url).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
-        await deviceRegistry.setConnectionStatus(deviceId, 'reachable');
+        await deviceRegistry.refreshConnection(
+          deviceId: deviceId,
+          ip: ip,
+          port: port,
+          status: 'reachable',
+        );
       } else {
         await deviceRegistry.setConnectionStatus(deviceId, 'unreachable');
       }
@@ -241,18 +269,22 @@ class DeviceDiscoveryService {
     final known = await deviceRegistry.getAllDevices();
     if (known.isNotEmpty) return;
 
-    debugPrint('[Discovery]: ⚠ No peers via mDNS — starting /24 subnet probe...');
+    debugPrint(
+        '[Discovery]: ⚠ No peers via mDNS — starting /24 subnet probe...');
     await _subnetFallbackProbe();
   }
 
   Future<void> _subnetFallbackProbe() async {
     try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLinkLocal: false);
+      final interfaces = await NetworkInterface.list(
+          type: InternetAddressType.IPv4, includeLinkLocal: false);
       String? ownIp;
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
           final a = addr.address;
-          if (a.startsWith('192.168.') || a.startsWith('10.') || a.startsWith('172.')) {
+          if (a.startsWith('192.168.') ||
+              a.startsWith('10.') ||
+              a.startsWith('172.')) {
             ownIp = a;
             break;
           }
@@ -280,7 +312,8 @@ class DeviceDiscoveryService {
 
   Future<void> _probeSubnetHost(String ip) async {
     try {
-      final response = await http.get(Uri.parse('http://$ip:$port/sync/v2/health'))
+      final response = await http
+          .get(Uri.parse('http://$ip:$port/sync/v2/health'))
           .timeout(const Duration(seconds: 2));
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -301,7 +334,8 @@ class DeviceDiscoveryService {
         );
 
         await deviceRegistry.setConnectionStatus(remoteDeviceId, 'reachable');
-        debugPrint('[Discovery]: 🎯 Found peer via subnet probe: $ip → $remoteDeviceId');
+        debugPrint(
+            '[Discovery]: 🎯 Found peer via subnet probe: $ip → $remoteDeviceId');
       }
     } on TimeoutException {
       // Expected for most IPs
@@ -318,7 +352,8 @@ class DeviceDiscoveryService {
   Future<bool> connectByIp(String ip, {int? customPort}) async {
     final targetPort = customPort ?? port;
     try {
-      final response = await http.get(Uri.parse('http://$ip:$targetPort/sync/v2/health'))
+      final response = await http
+          .get(Uri.parse('http://$ip:$targetPort/sync/v2/health'))
           .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -334,7 +369,8 @@ class DeviceDiscoveryService {
           port: targetPort,
         );
         await deviceRegistry.setConnectionStatus(remoteDeviceId, 'reachable');
-        debugPrint('[Discovery]: ✅ Manual connect succeeded: $ip → $remoteDeviceId');
+        debugPrint(
+            '[Discovery]: ✅ Manual connect succeeded: $ip → $remoteDeviceId');
         return true;
       }
       return false;
@@ -382,7 +418,8 @@ class DeviceDiscoveryService {
         debugPrint('[Discovery]: ✅ Pairing request delivered to $ip:$port');
         return true;
       }
-      debugPrint('[Discovery]: ❌ Pairing request to $ip:$port rejected: HTTP ${response.statusCode}');
+      debugPrint(
+          '[Discovery]: ❌ Pairing request to $ip:$port rejected: HTTP ${response.statusCode}');
       return false;
     } on TimeoutException {
       debugPrint('[Discovery]: ⏱️ Pairing request to $ip:$port timed out');
@@ -423,10 +460,12 @@ class DeviceDiscoveryService {
           .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        debugPrint('[Discovery]: ✅ Pairing response (accept=$accept) delivered to $ip:$port');
+        debugPrint(
+            '[Discovery]: ✅ Pairing response (accept=$accept) delivered to $ip:$port');
         return true;
       }
-      debugPrint('[Discovery]: ❌ Pairing response to $ip:$port rejected: HTTP ${response.statusCode}');
+      debugPrint(
+          '[Discovery]: ❌ Pairing response to $ip:$port rejected: HTTP ${response.statusCode}');
       return false;
     } on TimeoutException {
       debugPrint('[Discovery]: ⏱️ Pairing response to $ip:$port timed out');
@@ -444,7 +483,8 @@ class DeviceDiscoveryService {
   Future<Map<String, dynamic>> getDiagnostics() async {
     final allDevices = await deviceRegistry.getAllDevices();
     final paired = allDevices.where((d) => d.isPaired).length;
-    final reachable = allDevices.where((d) => d.connectionStatus == 'reachable').length;
+    final reachable =
+        allDevices.where((d) => d.connectionStatus == 'reachable').length;
 
     return {
       'advertiserRunning': _registration != null,

@@ -2,20 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:isar/isar.dart';
 
 import '../sync/v2/models/pairing_request.dart';
 import '../sync/v2/models/peer_device.dart';
-import '../sync/v2/models/sync_change_log.dart';
 import '../sync/v2/models/sync_cursor.dart';
-import '../sync/v2/services/change_journal.dart';
-import '../sync/v2/services/cursor_manager.dart';
-import '../sync/v2/services/device_discovery_service.dart';
 import '../sync/v2/services/device_registry.dart';
 import '../sync/v2/services/sync_manager.dart';
 import '../sync/v2/sync_initializer_v2.dart';
 import 'package:flutter/foundation.dart';
-import 'package:collection/collection.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Design tokens
@@ -110,7 +104,8 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
 
   void _startRefreshTimer() {
     _refreshTimer?.cancel();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) => _refresh());
+    _refreshTimer =
+        Timer.periodic(const Duration(seconds: 4), (_) => _refresh());
   }
 
   void _onStatusChange() {
@@ -127,7 +122,8 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
     try {
       final devices = await syncV2!.deviceRegistry.getAllDevices();
       final cursors = await syncV2!.cursorManager.getAllCursors();
-      final pendingRequests = await syncV2!.deviceRegistry.getPendingPairingRequests();
+      final pendingRequests =
+          await syncV2!.deviceRegistry.getPendingPairingRequests();
       final seq = await syncV2!.changeJournal.getCurrentSeq();
 
       // Count unsent changes for all paired peers
@@ -195,8 +191,12 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
                     syncing: _syncing,
                   ),
                   _TabStatistics(cursors: _cursors, devices: _devices),
-                  _TabPermissions(devices: _devices, registry: syncV2?.deviceRegistry, onRefresh: _refresh),
-                  _TabDiagnostics(diagnostics: _diagnostics, localSeq: _localSeq),
+                  _TabPermissions(
+                      devices: _devices,
+                      registry: syncV2?.deviceRegistry,
+                      onRefresh: _refresh),
+                  _TabDiagnostics(
+                      diagnostics: _diagnostics, localSeq: _localSeq),
                 ],
               ),
             ),
@@ -228,9 +228,12 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
                   end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(8),
-                boxShadow: const [BoxShadow(color: _accentGlow, blurRadius: 12)],
+                boxShadow: const [
+                  BoxShadow(color: _accentGlow, blurRadius: 12)
+                ],
               ),
-              child: const Icon(Icons.sync_rounded, color: Colors.white, size: 18),
+              child:
+                  const Icon(Icons.sync_rounded, color: Colors.white, size: 18),
             ),
             const SizedBox(width: 10),
             const Text(
@@ -309,7 +312,8 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
               onTap: () async {
                 setState(() => _syncing = true);
                 try {
-                  await syncV2?.syncManager.syncWithAllPeers();
+                  await syncV2?.syncManager
+                      .syncWithAllPeers(respectAutoSyncFlag: false);
                 } catch (e) {
                   if (mounted) setState(() => _lastError = 'Sync failed: $e');
                 } finally {
@@ -332,7 +336,8 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
                   try {
                     await syncV2?.forceFullSync();
                   } catch (e) {
-                    if (mounted) setState(() => _lastError = 'Force full sync failed: $e');
+                    if (mounted)
+                      setState(() => _lastError = 'Force full sync failed: $e');
                   } finally {
                     await _refresh();
                     if (mounted) setState(() => _syncing = false);
@@ -346,8 +351,8 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
               color: _green,
               onTap: () async {
                 if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Scanning network for SSMA devices...')));
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Scanning network for SSMA devices...')));
                 await syncV2?.discoveryService.rescan();
               },
             ),
@@ -369,14 +374,17 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
           builder: (ctx) => AlertDialog(
             backgroundColor: _card,
             title: Text(title, style: const TextStyle(color: _textPrimary)),
-            content: Text(message, style: const TextStyle(color: _textSecondary)),
+            content:
+                Text(message, style: const TextStyle(color: _textSecondary)),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel', style: TextStyle(color: _textSecondary))),
+                  child: const Text('Cancel',
+                      style: TextStyle(color: _textSecondary))),
               TextButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Proceed', style: TextStyle(color: _accent))),
+                  child:
+                      const Text('Proceed', style: TextStyle(color: _accent))),
             ],
           ),
         ) ??
@@ -389,7 +397,8 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
-        title: const Text('Connect by IP', style: TextStyle(color: _textPrimary)),
+        title:
+            const Text('Connect by IP', style: TextStyle(color: _textPrimary)),
         content: TextField(
           controller: ctrl,
           autofocus: true,
@@ -411,7 +420,8 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(color: _textSecondary))),
+              child: const Text('Cancel',
+                  style: TextStyle(color: _textSecondary))),
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
@@ -496,7 +506,8 @@ class _TabLocalDeviceState extends State<_TabLocalDevice> {
                         child: TextField(
                           controller: _nameCtrl,
                           autofocus: true,
-                          style: const TextStyle(color: _textPrimary, fontSize: 14),
+                          style: const TextStyle(
+                              color: _textPrimary, fontSize: 14),
                           decoration: const InputDecoration(
                             hintText: 'Device Name',
                             hintStyle: TextStyle(color: _textMuted),
@@ -513,13 +524,16 @@ class _TabLocalDeviceState extends State<_TabLocalDevice> {
                           } catch (e) {
                             if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Could not rename device: $e')));
+                                  SnackBar(
+                                      content:
+                                          Text('Could not rename device: $e')));
                             }
                             return;
                           }
                           if (mounted) setState(() => _editingName = false);
                         },
-                        child: const Text('Save', style: TextStyle(color: _accent)),
+                        child: const Text('Save',
+                            style: TextStyle(color: _accent)),
                       ),
                     ],
                   ),
@@ -529,7 +543,8 @@ class _TabLocalDeviceState extends State<_TabLocalDevice> {
                   label: 'Device Name',
                   value: v2?.deviceName ?? '—',
                   trailing: IconButton(
-                    icon: const Icon(Icons.edit_rounded, color: _textMuted, size: 16),
+                    icon: const Icon(Icons.edit_rounded,
+                        color: _textMuted, size: 16),
                     onPressed: () => setState(() => _editingName = true),
                   ),
                 ),
@@ -570,7 +585,8 @@ class _TabLocalDeviceState extends State<_TabLocalDevice> {
           _InfoRow(
             icon: Icons.rule_rounded,
             label: 'Conflict Strategy',
-            value: widget.syncV2?.conflictResolver.strategyName ?? 'Highest Version Wins',
+            value: widget.syncV2?.conflictResolver.strategyName ??
+                'Highest Version Wins',
           ),
         ]),
       ],
@@ -579,10 +595,12 @@ class _TabLocalDeviceState extends State<_TabLocalDevice> {
 
   String _detectPlatformLabel() {
     try {
-      if (Theme.of(context).platform == TargetPlatform.android) return 'Android';
+      if (Theme.of(context).platform == TargetPlatform.android)
+        return 'Android';
       if (Theme.of(context).platform == TargetPlatform.iOS) return 'iOS';
       if (Theme.of(context).platform == TargetPlatform.macOS) return 'macOS';
-      if (Theme.of(context).platform == TargetPlatform.windows) return 'Windows';
+      if (Theme.of(context).platform == TargetPlatform.windows)
+        return 'Windows';
       if (Theme.of(context).platform == TargetPlatform.linux) return 'Linux';
     } catch (_) {}
     return 'Unknown';
@@ -625,10 +643,13 @@ class _TabPairedDevices extends StatelessWidget {
           children: [
             Icon(Icons.devices_rounded, color: _textMuted, size: 64),
             const SizedBox(height: 16),
-            Text('No devices discovered yet', style: TextStyle(color: _textSecondary, fontSize: 16)),
+            Text('No devices discovered yet',
+                style: TextStyle(color: _textSecondary, fontSize: 16)),
             const SizedBox(height: 8),
-            Text('Make sure other devices running SSMA\nare on the same Wi-Fi network',
-                style: TextStyle(color: _textMuted, fontSize: 13), textAlign: TextAlign.center),
+            Text(
+                'Make sure other devices running SSMA\nare on the same Wi-Fi network',
+                style: TextStyle(color: _textMuted, fontSize: 13),
+                textAlign: TextAlign.center),
           ],
         ),
       );
@@ -652,10 +673,13 @@ class _TabPairedDevices extends StatelessWidget {
           const SizedBox(height: 8),
         ],
         if (devices.isNotEmpty) ...[
-          if (inbound.isNotEmpty || outbound.isNotEmpty) _SectionHeader('Devices'),
+          if (inbound.isNotEmpty || outbound.isNotEmpty)
+            _SectionHeader('Devices'),
           ...devices.map((d) => _DeviceCard(
                 device: d,
-                cursor: cursors.where((c) => c.remoteDeviceId == d.deviceId).firstOrNull,
+                cursor: cursors
+                    .where((c) => c.remoteDeviceId == d.deviceId)
+                    .firstOrNull,
                 localSeq: localSeq,
                 registry: registry,
                 onRefresh: onRefresh,
@@ -692,8 +716,8 @@ class _InboundPairingRequestCard extends StatelessWidget {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Could not respond to request: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not respond to request: $e')));
       }
     }
     onRefresh();
@@ -720,7 +744,10 @@ class _InboundPairingRequestCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   '${request.initiatorDeviceName} wants to pair',
-                  style: const TextStyle(color: _textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                      color: _textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600),
                 ),
               ),
             ],
@@ -778,7 +805,9 @@ class _OutboundPairingRequestCard extends StatelessWidget {
       child: const Row(
         children: [
           SizedBox(
-              width: 16, height: 16, child: CircularProgressIndicator(color: _orange, strokeWidth: 2)),
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(color: _orange, strokeWidth: 2)),
           SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -853,7 +882,8 @@ class _DeviceCardState extends State<_DeviceCard> {
       decoration: BoxDecoration(
         color: _card,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: device.isPaired ? _accent.withOpacity(0.3) : _border),
+        border: Border.all(
+            color: device.isPaired ? _accent.withOpacity(0.3) : _border),
         boxShadow: device.isPaired
             ? [BoxShadow(color: _accentGlow, blurRadius: 8, spreadRadius: 0)]
             : null,
@@ -885,29 +915,37 @@ class _DeviceCardState extends State<_DeviceCard> {
                         children: [
                           Text(device.deviceName,
                               style: const TextStyle(
-                                  color: _textPrimary, fontSize: 15, fontWeight: FontWeight.w600)),
+                                  color: _textPrimary,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600)),
                           const SizedBox(width: 6),
                           if (device.isPaired)
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                 color: _accentGlow,
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: const Text('PAIRED',
-                                  style: TextStyle(color: _accent, fontSize: 9, fontWeight: FontWeight.w700)),
+                                  style: TextStyle(
+                                      color: _accent,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700)),
                             ),
                         ],
                       ),
                       const SizedBox(height: 2),
                       Text(device.lastKnownIp,
-                          style: const TextStyle(color: _textSecondary, fontSize: 12)),
+                          style: const TextStyle(
+                              color: _textSecondary, fontSize: 12)),
                     ],
                   ),
                 ),
                 // Status indicator
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: _statusColor().withOpacity(0.12),
                     borderRadius: BorderRadius.circular(20),
@@ -920,7 +958,10 @@ class _DeviceCardState extends State<_DeviceCard> {
                       const SizedBox(width: 4),
                       Text(
                         device.connectionStatus.toUpperCase(),
-                        style: TextStyle(color: _statusColor(), fontSize: 10, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                            color: _statusColor(),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700),
                       ),
                     ],
                   ),
@@ -941,7 +982,9 @@ class _DeviceCardState extends State<_DeviceCard> {
                 _MiniStat(label: 'Last Seen', value: _lastSeen()),
                 _MiniStat(
                   label: 'Sync Cursor',
-                  value: widget.cursor != null ? '${widget.cursor!.lastReceivedSeq}' : '—',
+                  value: widget.cursor != null
+                      ? '${widget.cursor!.lastReceivedSeq}'
+                      : '—',
                 ),
                 _MiniStat(
                   label: 'Pending',
@@ -967,11 +1010,12 @@ class _DeviceCardState extends State<_DeviceCard> {
                     color: _accent,
                     onTap: () async {
                       try {
-                        await syncV2?.syncManager.syncWithDevice(device.deviceId);
+                        await syncV2?.syncManager
+                            .syncWithDevice(device.deviceId);
                       } catch (e) {
                         if (mounted) {
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(SnackBar(content: Text('Sync failed: $e')));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Sync failed: $e')));
                         }
                       }
                       widget.onRefresh();
@@ -987,21 +1031,33 @@ class _DeviceCardState extends State<_DeviceCard> {
                             context: context,
                             builder: (ctx) => AlertDialog(
                               backgroundColor: _card,
-                              title: const Text('Reset Cursor', style: TextStyle(color: _textPrimary)),
-                              content: const Text('This resets the sync cursor to 0 and re-downloads everything for this device. Proceed?', style: TextStyle(color: _textSecondary)),
+                              title: const Text('Reset Cursor',
+                                  style: TextStyle(color: _textPrimary)),
+                              content: const Text(
+                                  'This resets the sync cursor to 0 and re-downloads everything for this device. Proceed?',
+                                  style: TextStyle(color: _textSecondary)),
                               actions: [
-                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel', style: TextStyle(color: _textSecondary))),
-                                TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Proceed', style: TextStyle(color: _accent))),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text('Cancel',
+                                        style:
+                                            TextStyle(color: _textSecondary))),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text('Proceed',
+                                        style: TextStyle(color: _accent))),
                               ],
                             ),
-                          ) ?? false;
+                          ) ??
+                          false;
                       if (!ok || !mounted) return;
                       try {
-                        await syncV2?.cursorManager.resetCursor(device.deviceId);
+                        await syncV2?.cursorManager
+                            .resetCursor(device.deviceId);
                       } catch (e) {
                         if (mounted) {
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(SnackBar(content: Text('Could not reset cursor: $e')));
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text('Could not reset cursor: $e')));
                         }
                       }
                       widget.onRefresh();
@@ -1015,11 +1071,12 @@ class _DeviceCardState extends State<_DeviceCard> {
                     onTap: () async {
                       try {
                         await widget.registry?.unpairDevice(device.deviceId);
-                        await syncV2?.cursorManager.deleteCursor(device.deviceId);
+                        await syncV2?.cursorManager
+                            .deleteCursor(device.deviceId);
                       } catch (e) {
                         if (mounted) {
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(SnackBar(content: Text('Could not unpair: $e')));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Could not unpair: $e')));
                         }
                       }
                       widget.onRefresh();
@@ -1037,7 +1094,9 @@ class _DeviceCardState extends State<_DeviceCard> {
                     label: _pairingInFlight ? 'Sending...' : 'Request Pairing',
                     icon: Icons.link_rounded,
                     color: _green,
-                    onTap: _pairingInFlight ? () {} : () => _requestPairing(context),
+                    onTap: _pairingInFlight
+                        ? () {}
+                        : () => _requestPairing(context),
                   ),
                 ],
               ),
@@ -1093,8 +1152,8 @@ class _DeviceCardState extends State<_DeviceCard> {
       widget.onRefresh();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('❌ Pairing request failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ Pairing request failed: $e')));
     } finally {
       if (mounted) setState(() => _pairingInFlight = false);
     }
@@ -1151,10 +1210,13 @@ class _TabSyncStatus extends StatelessWidget {
                 const SizedBox(
                     width: 28,
                     height: 28,
-                    child: CircularProgressIndicator(color: _accent, strokeWidth: 2.5))
+                    child: CircularProgressIndicator(
+                        color: _accent, strokeWidth: 2.5))
               else
                 Icon(
-                  lastError != null ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded,
+                  lastError != null
+                      ? Icons.error_outline_rounded
+                      : Icons.check_circle_outline_rounded,
                   color: lastError != null ? _red : _green,
                   size: 28,
                 ),
@@ -1164,9 +1226,15 @@ class _TabSyncStatus extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      syncing ? 'Syncing...' : (lastError != null ? 'Last sync failed' : 'Sync up to date'),
+                      syncing
+                          ? 'Syncing...'
+                          : (lastError != null
+                              ? 'Last sync failed'
+                              : 'Sync up to date'),
                       style: TextStyle(
-                        color: syncing ? _accent : (lastError != null ? _red : _green),
+                        color: syncing
+                            ? _accent
+                            : (lastError != null ? _red : _green),
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
                       ),
@@ -1174,7 +1242,8 @@ class _TabSyncStatus extends StatelessWidget {
                     if (lastSyncTime != null)
                       Text(
                         'Last sync: ${_formatTime(lastSyncTime!)}',
-                        style: const TextStyle(color: _textSecondary, fontSize: 12),
+                        style: const TextStyle(
+                            color: _textSecondary, fontSize: 12),
                       ),
                   ],
                 ),
@@ -1208,7 +1277,8 @@ class _TabSyncStatus extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _red.withOpacity(0.3)),
             ),
-            child: Text(lastError!, style: const TextStyle(color: _red, fontSize: 13, height: 1.5)),
+            child: Text(lastError!,
+                style: const TextStyle(color: _red, fontSize: 13, height: 1.5)),
           ),
         ],
       ],
@@ -1231,7 +1301,8 @@ class _TabStatistics extends StatelessWidget {
     final totalSent = cursors.fold(0, (sum, c) => sum + c.totalSent);
     final totalReceived = cursors.fold(0, (sum, c) => sum + c.totalReceived);
     final paired = devices.where((d) => d.isPaired).length;
-    final reachable = devices.where((d) => d.connectionStatus == 'reachable').length;
+    final reachable =
+        devices.where((d) => d.connectionStatus == 'reachable').length;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -1245,10 +1316,26 @@ class _TabStatistics extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           childAspectRatio: 1.6,
           children: [
-            _StatTile(label: 'Total Devices', value: '${devices.length}', icon: Icons.devices_rounded, color: _accent),
-            _StatTile(label: 'Paired', value: '$paired', icon: Icons.link_rounded, color: _green),
-            _StatTile(label: 'Reachable', value: '$reachable', icon: Icons.wifi_rounded, color: _orange),
-            _StatTile(label: 'Offline', value: '${devices.length - reachable}', icon: Icons.wifi_off_rounded, color: _red),
+            _StatTile(
+                label: 'Total Devices',
+                value: '${devices.length}',
+                icon: Icons.devices_rounded,
+                color: _accent),
+            _StatTile(
+                label: 'Paired',
+                value: '$paired',
+                icon: Icons.link_rounded,
+                color: _green),
+            _StatTile(
+                label: 'Reachable',
+                value: '$reachable',
+                icon: Icons.wifi_rounded,
+                color: _orange),
+            _StatTile(
+                label: 'Offline',
+                value: '${devices.length - reachable}',
+                icon: Icons.wifi_off_rounded,
+                color: _red),
           ],
         ),
         const SizedBox(height: 16),
@@ -1261,27 +1348,53 @@ class _TabStatistics extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           childAspectRatio: 1.6,
           children: [
-            _StatTile(label: 'Changes Sent', value: '$totalSent', icon: Icons.upload_rounded, color: _accent),
-            _StatTile(label: 'Changes Received', value: '$totalReceived', icon: Icons.download_rounded, color: _green),
+            _StatTile(
+                label: 'Changes Sent',
+                value: '$totalSent',
+                icon: Icons.upload_rounded,
+                color: _accent),
+            _StatTile(
+                label: 'Changes Received',
+                value: '$totalReceived',
+                icon: Icons.download_rounded,
+                color: _green),
           ],
         ),
         if (cursors.isNotEmpty) ...[
           const SizedBox(height: 16),
           _SectionHeader('Per-Device Cursors'),
           ...cursors.map((c) {
-            final device = devices.where((d) => d.deviceId == c.remoteDeviceId).firstOrNull;
+            final device = devices
+                .where((d) => d.deviceId == c.remoteDeviceId)
+                .firstOrNull;
             return _InfoCard(
               margin: const EdgeInsets.only(bottom: 10),
               children: [
-                _InfoRow(icon: Icons.devices_rounded, label: device?.deviceName ?? c.remoteDeviceId.substring(0, 8), value: ''),
+                _InfoRow(
+                    icon: Icons.devices_rounded,
+                    label:
+                        device?.deviceName ?? c.remoteDeviceId.substring(0, 8),
+                    value: ''),
                 _divider(),
-                _InfoRow(icon: Icons.download_rounded, label: 'Last Received Seq', value: '#${c.lastReceivedSeq}'),
+                _InfoRow(
+                    icon: Icons.download_rounded,
+                    label: 'Last Received Seq',
+                    value: '#${c.lastReceivedSeq}'),
                 _divider(),
-                _InfoRow(icon: Icons.upload_rounded, label: 'Last Sent Seq', value: '#${c.lastSentSeq}'),
+                _InfoRow(
+                    icon: Icons.upload_rounded,
+                    label: 'Last Sent Seq',
+                    value: '#${c.lastSentSeq}'),
                 _divider(),
-                _InfoRow(icon: Icons.history_rounded, label: 'Total Received', value: '${c.totalReceived}'),
+                _InfoRow(
+                    icon: Icons.history_rounded,
+                    label: 'Total Received',
+                    value: '${c.totalReceived}'),
                 _divider(),
-                _InfoRow(icon: Icons.history_rounded, label: 'Total Sent', value: '${c.totalSent}'),
+                _InfoRow(
+                    icon: Icons.history_rounded,
+                    label: 'Total Sent',
+                    value: '${c.totalSent}'),
               ],
             );
           }),
@@ -1300,7 +1413,8 @@ class _TabPermissions extends StatelessWidget {
   final DeviceRegistry? registry;
   final VoidCallback onRefresh;
 
-  const _TabPermissions({required this.devices, required this.registry, required this.onRefresh});
+  const _TabPermissions(
+      {required this.devices, required this.registry, required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
@@ -1308,14 +1422,16 @@ class _TabPermissions extends StatelessWidget {
 
     if (paired.isEmpty) {
       return const Center(
-        child: Text('No paired devices to configure', style: TextStyle(color: _textSecondary)),
+        child: Text('No paired devices to configure',
+            style: TextStyle(color: _textSecondary)),
       );
     }
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: paired
-          .map((d) => _PermissionCard(device: d, registry: registry, onRefresh: onRefresh))
+          .map((d) => _PermissionCard(
+              device: d, registry: registry, onRefresh: onRefresh))
           .toList(),
     );
   }
@@ -1326,7 +1442,8 @@ class _PermissionCard extends StatelessWidget {
   final DeviceRegistry? registry;
   final VoidCallback onRefresh;
 
-  const _PermissionCard({required this.device, required this.registry, required this.onRefresh});
+  const _PermissionCard(
+      {required this.device, required this.registry, required this.onRefresh});
 
   Future<void> _updatePermission(
     BuildContext context, {
@@ -1343,8 +1460,8 @@ class _PermissionCard extends StatelessWidget {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Could not update permission: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not update permission: $e')));
       }
     }
     onRefresh();
@@ -1368,7 +1485,10 @@ class _PermissionCard extends StatelessWidget {
                 const Icon(Icons.devices_rounded, color: _accent, size: 20),
                 const SizedBox(width: 10),
                 Text(device.deviceName,
-                    style: const TextStyle(color: _textPrimary, fontSize: 15, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(
+                        color: _textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600)),
               ],
             ),
           ),
@@ -1421,8 +1541,10 @@ class _PermToggle extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(color: _textPrimary, fontSize: 13)),
-                Text(subtitle, style: const TextStyle(color: _textMuted, fontSize: 11)),
+                Text(label,
+                    style: const TextStyle(color: _textPrimary, fontSize: 13)),
+                Text(subtitle,
+                    style: const TextStyle(color: _textMuted, fontSize: 11)),
               ],
             ),
           ),
@@ -1431,7 +1553,8 @@ class _PermToggle extends StatelessWidget {
             onChanged: onChanged,
             activeColor: _accent,
             trackColor: WidgetStateProperty.resolveWith(
-              (states) => states.contains(WidgetState.selected) ? _accentGlow : _border,
+              (states) =>
+                  states.contains(WidgetState.selected) ? _accentGlow : _border,
             ),
           ),
         ],
@@ -1460,14 +1583,19 @@ class _TabDiagnostics extends StatelessWidget {
           _InfoRow(
             icon: Icons.broadcast_on_home_rounded,
             label: 'mDNS Advertiser',
-            value: diagnostics['advertiserRunning'] == true ? 'Running' : 'Stopped',
-            valueColor: diagnostics['advertiserRunning'] == true ? _green : _red,
+            value: diagnostics['advertiserRunning'] == true
+                ? 'Running'
+                : 'Stopped',
+            valueColor:
+                diagnostics['advertiserRunning'] == true ? _green : _red,
           ),
           _divider(),
           _InfoRow(
             icon: Icons.radar_rounded,
             label: 'mDNS Discovery',
-            value: diagnostics['discoveryRunning'] == true ? 'Scanning' : 'Stopped',
+            value: diagnostics['discoveryRunning'] == true
+                ? 'Scanning'
+                : 'Stopped',
             valueColor: diagnostics['discoveryRunning'] == true ? _green : _red,
           ),
           _divider(),
@@ -1486,7 +1614,10 @@ class _TabDiagnostics extends StatelessWidget {
         const SizedBox(height: 16),
         _SectionHeader('Change Journal'),
         _InfoCard(children: [
-          _InfoRow(icon: Icons.commit_rounded, label: 'Current Sequence', value: '#$localSeq'),
+          _InfoRow(
+              icon: Icons.commit_rounded,
+              label: 'Current Sequence',
+              value: '#$localSeq'),
           _divider(),
           _InfoRow(
             icon: Icons.devices_rounded,
@@ -1509,13 +1640,25 @@ class _TabDiagnostics extends StatelessWidget {
         const SizedBox(height: 16),
         _SectionHeader('Protocol'),
         _InfoCard(children: [
-          _InfoRow(icon: Icons.numbers_rounded, label: 'Protocol Version', value: 'v2'),
+          _InfoRow(
+              icon: Icons.numbers_rounded,
+              label: 'Protocol Version',
+              value: 'v2'),
           _divider(),
-          _InfoRow(icon: Icons.security_rounded, label: 'Replay Protection', value: 'changeId UUID dedup'),
+          _InfoRow(
+              icon: Icons.security_rounded,
+              label: 'Replay Protection',
+              value: 'changeId UUID dedup'),
           _divider(),
-          _InfoRow(icon: Icons.compress_rounded, label: 'Batch Size', value: '200 changes/request'),
+          _InfoRow(
+              icon: Icons.compress_rounded,
+              label: 'Batch Size',
+              value: '200 changes/request'),
           _divider(),
-          _InfoRow(icon: Icons.history_rounded, label: 'Resume Strategy', value: 'Cursor-safe, never resets'),
+          _InfoRow(
+              icon: Icons.history_rounded,
+              label: 'Resume Strategy',
+              value: 'Cursor-safe, never resets'),
         ]),
       ],
     );
@@ -1591,7 +1734,8 @@ class _InfoRow extends StatelessWidget {
           Icon(icon, color: _textMuted, size: 16),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(label, style: const TextStyle(color: _textSecondary, fontSize: 13)),
+            child: Text(label,
+                style: const TextStyle(color: _textSecondary, fontSize: 13)),
           ),
           if (trailing != null)
             trailing!
@@ -1600,8 +1744,8 @@ class _InfoRow extends StatelessWidget {
               onTap: copyable
                   ? () {
                       Clipboard.setData(ClipboardData(text: value));
-                      ScaffoldMessenger.of(context)
-                          .showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Copied to clipboard')));
                     }
                   : null,
               child: Row(
@@ -1639,7 +1783,11 @@ class _StatTile extends StatelessWidget {
   final IconData icon;
   final Color color;
 
-  const _StatTile({required this.label, required this.value, required this.icon, required this.color});
+  const _StatTile(
+      {required this.label,
+      required this.value,
+      required this.icon,
+      required this.color});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1659,8 +1807,13 @@ class _StatTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(value,
-                    style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.w700)),
-                Text(label, style: const TextStyle(color: _textSecondary, fontSize: 11)),
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700)),
+                Text(label,
+                    style:
+                        const TextStyle(color: _textSecondary, fontSize: 11)),
               ],
             ),
           ],
@@ -1680,7 +1833,9 @@ class _MiniStat extends StatelessWidget {
         children: [
           Text(value,
               style: TextStyle(
-                  color: valueColor ?? _textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
+                  color: valueColor ?? _textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600)),
           const SizedBox(height: 2),
           Text(label, style: const TextStyle(color: _textMuted, fontSize: 10)),
         ],
@@ -1720,11 +1875,14 @@ class _ActionButton extends StatelessWidget {
                 SizedBox(
                     width: 14,
                     height: 14,
-                    child: CircularProgressIndicator(color: color, strokeWidth: 2))
+                    child:
+                        CircularProgressIndicator(color: color, strokeWidth: 2))
               else
                 Icon(icon, color: color, size: 16),
               const SizedBox(width: 6),
-              Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+              Text(label,
+                  style: TextStyle(
+                      color: color, fontSize: 12, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
@@ -1737,7 +1895,11 @@ class _SmallButton extends StatelessWidget {
   final Color color;
   final VoidCallback onTap;
 
-  const _SmallButton({required this.label, required this.icon, required this.color, required this.onTap});
+  const _SmallButton(
+      {required this.label,
+      required this.icon,
+      required this.color,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) => GestureDetector(
@@ -1754,7 +1916,9 @@ class _SmallButton extends StatelessWidget {
             children: [
               Icon(icon, color: color, size: 12),
               const SizedBox(width: 4),
-              Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+              Text(label,
+                  style: TextStyle(
+                      color: color, fontSize: 11, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
@@ -1769,14 +1933,17 @@ class _SyncPulseIcon extends StatefulWidget {
   State<_SyncPulseIcon> createState() => _SyncPulseIconState();
 }
 
-class _SyncPulseIconState extends State<_SyncPulseIcon> with SingleTickerProviderStateMixin {
+class _SyncPulseIconState extends State<_SyncPulseIcon>
+    with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Animation<double> _anim;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat();
+    _ctrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 1))
+          ..repeat();
     _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
   }
 
