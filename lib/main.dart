@@ -7,11 +7,13 @@ import 'package:ssma/screens/home_screen.dart';
 import 'package:ssma/screens/inventory_screen.dart';
 import 'package:ssma/screens/new_sale_screen.dart';
 import 'package:ssma/screens/sales_history_screen.dart';
+import 'package:ssma/screens/sync_settings_screen_v2.dart';
 
 import 'services/db_service.dart';
-import 'services/sync_service.dart';
+import 'services/device_service.dart';
+import 'package:ssma/sync/v2/sync_initializer_v2.dart';
 
-SyncService? syncService;
+SyncInitializer? sync_initializer_v2;
 const bool kEnableLanSync =
     bool.fromEnvironment('ENABLE_LAN_SYNC', defaultValue: true);
 
@@ -36,29 +38,13 @@ Future<void> main() async {
 Future<void> _bootstrapSync() async {
   try {
     await Future<void>.delayed(const Duration(seconds: 2));
-    final service = SyncService();
-    syncService = service;
-    final started = await service.start();
-    if (!started) {
-      debugPrint('LAN sync disabled: startup failed safely.');
-      return;
-    }
-    unawaited(_startInitialSync(service));
-  } catch (error, stackTrace) {
-    debugPrint('Sync bootstrap failed: $error');
-    debugPrintStack(stackTrace: stackTrace);
-  }
+
+    // ── Sync v2 (new P2P engine) ─────────────────────────────────────────
+    syncV2 = SyncInitializerV2(port: 8080);
+    await syncV2!.initialize();
+    debugPrint('[Bootstrap]: Sync v2 engine initialized (deviceId=${syncV2!.deviceId})');
 }
 
-Future<void> _startInitialSync(SyncService service) async {
-  try {
-    await service.sync();
-    debugPrint('Initial sync completed');
-  } catch (error, stackTrace) {
-    debugPrint('Initial sync failed: $error');
-    debugPrintStack(stackTrace: stackTrace);
-  }
-}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -101,23 +87,6 @@ class _MainNavigationState extends State<MainNavigation> {
   @override
   void initState() {
     super.initState();
-    if (kEnableLanSync) {
-      _startAutoSync();
-    }
-  }
-
-  void _startAutoSync() {
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(minutes: 5));
-      try {
-        await syncService?.sync();
-        debugPrint('Auto sync successful');
-      } catch (error, stackTrace) {
-        debugPrint('Auto sync failed: $error');
-        debugPrintStack(stackTrace: stackTrace);
-      }
-      return mounted;
-    });
   }
 
   void _onItemTapped(int index) {

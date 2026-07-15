@@ -1,5 +1,5 @@
 name: ssma
-description: "A new Flutter project."
+description: "Surana App"
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -12,7 +12,8 @@ dependencies:
   uuid: ^4.5.2
   http: ^1.2.2
   shelf: ^1.4.1
-  multicast_dns: ^0.3.3
+  shelf_router: ^1.1.4       # Route builder for LocalSyncServer
+  crypto: ^3.0.3             # SHA-256 for change chain hashes
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6
@@ -25,6 +26,7 @@ dependencies:
   isar: ^3.1.0+1
   isar_flutter_libs: ^3.1.0+1
   excel: ^2.1.0
+  nsd: ^5.0.0
 
 dev_dependencies:
   mocktail: ^1.0.4
@@ -35,6 +37,15 @@ dev_dependencies:
   build_runner: ^2.4.8
   isar_generator: ^3.1.0+1
   flutter_lints: ^3.0.1
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  macos:
+    generate: true
+    image_path: "assets/logo_app.png"
+  image_path: "assets/logo_app.png"
 
 
 
@@ -44,3 +55,4 @@ flutter:
   assets:
     - assets/fonts/Roboto-Regular.ttf
     - assets/fonts/Roboto-Bold.ttf
+    - assets/logo_app.png

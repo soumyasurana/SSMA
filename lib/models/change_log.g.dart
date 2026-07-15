@@ -32,31 +32,35 @@ const ChangeLogSchema = CollectionSchema(
       name: r'opId',
       type: IsarType.string,
     ),
-    r'operation': PropertySchema(
+    r'operationType': PropertySchema(
       id: 3,
-      name: r'operation',
+      name: r'operationType',
       type: IsarType.string,
-      enumMap: _ChangeLogoperationEnumValueMap,
     ),
     r'originDeviceId': PropertySchema(
       id: 4,
       name: r'originDeviceId',
       type: IsarType.string,
     ),
-    r'recordId': PropertySchema(
+    r'payload': PropertySchema(
       id: 5,
-      name: r'recordId',
+      name: r'payload',
       type: IsarType.string,
     ),
-    r'synced': PropertySchema(
+    r'recordId': PropertySchema(
       id: 6,
+      name: r'recordId',
+      type: IsarType.long,
+    ),
+    r'synced': PropertySchema(
+      id: 7,
       name: r'synced',
       type: IsarType.bool,
     ),
     r'timestamp': PropertySchema(
-      id: 7,
+      id: 8,
       name: r'timestamp',
-      type: IsarType.dateTime,
+      type: IsarType.long,
     )
   },
   estimateSize: _changeLogEstimateSize,
@@ -65,6 +69,32 @@ const ChangeLogSchema = CollectionSchema(
   deserializeProp: _changeLogDeserializeProp,
   idName: r'id',
   indexes: {
+    r'opId': IndexSchema(
+      id: -7257366839637970090,
+      name: r'opId',
+      unique: true,
+      replace: true,
+      properties: [
+        IndexPropertySchema(
+          name: r'opId',
+          type: IndexType.hash,
+          caseSensitive: true,
+        )
+      ],
+    ),
+    r'changeSeq': IndexSchema(
+      id: 4496260395805165179,
+      name: r'changeSeq',
+      unique: false,
+      replace: false,
+      properties: [
+        IndexPropertySchema(
+          name: r'changeSeq',
+          type: IndexType.value,
+          caseSensitive: false,
+        )
+      ],
+    ),
     r'collection': IndexSchema(
       id: -1843270535372135219,
       name: r'collection',
@@ -86,34 +116,21 @@ const ChangeLogSchema = CollectionSchema(
       properties: [
         IndexPropertySchema(
           name: r'recordId',
-          type: IndexType.hash,
-          caseSensitive: true,
+          type: IndexType.value,
+          caseSensitive: false,
         )
       ],
     ),
-    r'opId': IndexSchema(
-      id: -7257366839637970090,
-      name: r'opId',
-      unique: true,
-      replace: false,
-      properties: [
-        IndexPropertySchema(
-          name: r'opId',
-          type: IndexType.hash,
-          caseSensitive: true,
-        )
-      ],
-    ),
-    r'changeSeq': IndexSchema(
-      id: 4496260395805165179,
-      name: r'changeSeq',
+    r'operationType': IndexSchema(
+      id: 7940488376024458150,
+      name: r'operationType',
       unique: false,
       replace: false,
       properties: [
         IndexPropertySchema(
-          name: r'changeSeq',
-          type: IndexType.value,
-          caseSensitive: false,
+          name: r'operationType',
+          type: IndexType.hash,
+          caseSensitive: true,
         )
       ],
     ),
@@ -142,6 +159,19 @@ const ChangeLogSchema = CollectionSchema(
           caseSensitive: false,
         )
       ],
+    ),
+    r'originDeviceId': IndexSchema(
+      id: 8292248109096074014,
+      name: r'originDeviceId',
+      unique: false,
+      replace: false,
+      properties: [
+        IndexPropertySchema(
+          name: r'originDeviceId',
+          type: IndexType.hash,
+          caseSensitive: true,
+        )
+      ],
     )
   },
   links: {},
@@ -160,9 +190,9 @@ int _changeLogEstimateSize(
   var bytesCount = offsets.last;
   bytesCount += 3 + object.collection.length * 3;
   bytesCount += 3 + object.opId.length * 3;
-  bytesCount += 3 + object.operation.name.length * 3;
+  bytesCount += 3 + object.operationType.length * 3;
   bytesCount += 3 + object.originDeviceId.length * 3;
-  bytesCount += 3 + object.recordId.length * 3;
+  bytesCount += 3 + object.payload.length * 3;
   return bytesCount;
 }
 
@@ -175,11 +205,12 @@ void _changeLogSerialize(
   writer.writeLong(offsets[0], object.changeSeq);
   writer.writeString(offsets[1], object.collection);
   writer.writeString(offsets[2], object.opId);
-  writer.writeString(offsets[3], object.operation.name);
+  writer.writeString(offsets[3], object.operationType);
   writer.writeString(offsets[4], object.originDeviceId);
-  writer.writeString(offsets[5], object.recordId);
-  writer.writeBool(offsets[6], object.synced);
-  writer.writeDateTime(offsets[7], object.timestamp);
+  writer.writeString(offsets[5], object.payload);
+  writer.writeLong(offsets[6], object.recordId);
+  writer.writeBool(offsets[7], object.synced);
+  writer.writeLong(offsets[8], object.timestamp);
 }
 
 ChangeLog _changeLogDeserialize(
@@ -193,13 +224,12 @@ ChangeLog _changeLogDeserialize(
   object.collection = reader.readString(offsets[1]);
   object.id = id;
   object.opId = reader.readString(offsets[2]);
-  object.operation =
-      _ChangeLogoperationValueEnumMap[reader.readStringOrNull(offsets[3])] ??
-          ChangeOperation.create;
+  object.operationType = reader.readString(offsets[3]);
   object.originDeviceId = reader.readString(offsets[4]);
-  object.recordId = reader.readString(offsets[5]);
-  object.synced = reader.readBool(offsets[6]);
-  object.timestamp = reader.readDateTime(offsets[7]);
+  object.payload = reader.readString(offsets[5]);
+  object.recordId = reader.readLong(offsets[6]);
+  object.synced = reader.readBool(offsets[7]);
+  object.timestamp = reader.readLong(offsets[8]);
   return object;
 }
 
@@ -217,32 +247,21 @@ P _changeLogDeserializeProp<P>(
     case 2:
       return (reader.readString(offset)) as P;
     case 3:
-      return (_ChangeLogoperationValueEnumMap[
-              reader.readStringOrNull(offset)] ??
-          ChangeOperation.create) as P;
+      return (reader.readString(offset)) as P;
     case 4:
       return (reader.readString(offset)) as P;
     case 5:
       return (reader.readString(offset)) as P;
     case 6:
-      return (reader.readBool(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 7:
-      return (reader.readDateTime(offset)) as P;
+      return (reader.readBool(offset)) as P;
+    case 8:
+      return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
   }
 }
-
-const _ChangeLogoperationEnumValueMap = {
-  r'create': r'create',
-  r'update': r'update',
-  r'delete': r'delete',
-};
-const _ChangeLogoperationValueEnumMap = {
-  r'create': ChangeOperation.create,
-  r'update': ChangeOperation.update,
-  r'delete': ChangeOperation.delete,
-};
 
 Id _changeLogGetId(ChangeLog object) {
   return object.id;
@@ -322,6 +341,14 @@ extension ChangeLogQueryWhereSort
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(
         const IndexWhereClause.any(indexName: r'changeSeq'),
+      );
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhere> anyRecordId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(
+        const IndexWhereClause.any(indexName: r'recordId'),
       );
     });
   }
@@ -407,96 +434,6 @@ extension ChangeLogQueryWhere
         upper: upperId,
         includeUpper: includeUpper,
       ));
-    });
-  }
-
-  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> collectionEqualTo(
-      String collection) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addWhereClause(IndexWhereClause.equalTo(
-        indexName: r'collection',
-        value: [collection],
-      ));
-    });
-  }
-
-  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> collectionNotEqualTo(
-      String collection) {
-    return QueryBuilder.apply(this, (query) {
-      if (query.whereSort == Sort.asc) {
-        return query
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'collection',
-              lower: [],
-              upper: [collection],
-              includeUpper: false,
-            ))
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'collection',
-              lower: [collection],
-              includeLower: false,
-              upper: [],
-            ));
-      } else {
-        return query
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'collection',
-              lower: [collection],
-              includeLower: false,
-              upper: [],
-            ))
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'collection',
-              lower: [],
-              upper: [collection],
-              includeUpper: false,
-            ));
-      }
-    });
-  }
-
-  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> recordIdEqualTo(
-      String recordId) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addWhereClause(IndexWhereClause.equalTo(
-        indexName: r'recordId',
-        value: [recordId],
-      ));
-    });
-  }
-
-  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> recordIdNotEqualTo(
-      String recordId) {
-    return QueryBuilder.apply(this, (query) {
-      if (query.whereSort == Sort.asc) {
-        return query
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
-              lower: [],
-              upper: [recordId],
-              includeUpper: false,
-            ))
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
-              lower: [recordId],
-              includeLower: false,
-              upper: [],
-            ));
-      } else {
-        return query
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
-              lower: [recordId],
-              includeLower: false,
-              upper: [],
-            ))
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
-              lower: [],
-              upper: [recordId],
-              includeUpper: false,
-            ));
-      }
     });
   }
 
@@ -635,8 +572,188 @@ extension ChangeLogQueryWhere
     });
   }
 
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> collectionEqualTo(
+      String collection) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'collection',
+        value: [collection],
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> collectionNotEqualTo(
+      String collection) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'collection',
+              lower: [],
+              upper: [collection],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'collection',
+              lower: [collection],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'collection',
+              lower: [collection],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'collection',
+              lower: [],
+              upper: [collection],
+              includeUpper: false,
+            ));
+      }
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> recordIdEqualTo(
+      int recordId) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'recordId',
+        value: [recordId],
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> recordIdNotEqualTo(
+      int recordId) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'recordId',
+              lower: [],
+              upper: [recordId],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'recordId',
+              lower: [recordId],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'recordId',
+              lower: [recordId],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'recordId',
+              lower: [],
+              upper: [recordId],
+              includeUpper: false,
+            ));
+      }
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> recordIdGreaterThan(
+    int recordId, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.between(
+        indexName: r'recordId',
+        lower: [recordId],
+        includeLower: include,
+        upper: [],
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> recordIdLessThan(
+    int recordId, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.between(
+        indexName: r'recordId',
+        lower: [],
+        upper: [recordId],
+        includeUpper: include,
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> recordIdBetween(
+    int lowerRecordId,
+    int upperRecordId, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.between(
+        indexName: r'recordId',
+        lower: [lowerRecordId],
+        includeLower: includeLower,
+        upper: [upperRecordId],
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> operationTypeEqualTo(
+      String operationType) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'operationType',
+        value: [operationType],
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> operationTypeNotEqualTo(
+      String operationType) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'operationType',
+              lower: [],
+              upper: [operationType],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'operationType',
+              lower: [operationType],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'operationType',
+              lower: [operationType],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'operationType',
+              lower: [],
+              upper: [operationType],
+              includeUpper: false,
+            ));
+      }
+    });
+  }
+
   QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> timestampEqualTo(
-      DateTime timestamp) {
+      int timestamp) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(IndexWhereClause.equalTo(
         indexName: r'timestamp',
@@ -646,7 +763,7 @@ extension ChangeLogQueryWhere
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> timestampNotEqualTo(
-      DateTime timestamp) {
+      int timestamp) {
     return QueryBuilder.apply(this, (query) {
       if (query.whereSort == Sort.asc) {
         return query
@@ -681,7 +798,7 @@ extension ChangeLogQueryWhere
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> timestampGreaterThan(
-    DateTime timestamp, {
+    int timestamp, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
@@ -695,7 +812,7 @@ extension ChangeLogQueryWhere
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> timestampLessThan(
-    DateTime timestamp, {
+    int timestamp, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
@@ -709,8 +826,8 @@ extension ChangeLogQueryWhere
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> timestampBetween(
-    DateTime lowerTimestamp,
-    DateTime upperTimestamp, {
+    int lowerTimestamp,
+    int upperTimestamp, {
     bool includeLower = true,
     bool includeUpper = true,
   }) {
@@ -764,6 +881,51 @@ extension ChangeLogQueryWhere
               indexName: r'synced',
               lower: [],
               upper: [synced],
+              includeUpper: false,
+            ));
+      }
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause> originDeviceIdEqualTo(
+      String originDeviceId) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'originDeviceId',
+        value: [originDeviceId],
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterWhereClause>
+      originDeviceIdNotEqualTo(String originDeviceId) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'originDeviceId',
+              lower: [],
+              upper: [originDeviceId],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'originDeviceId',
+              lower: [originDeviceId],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'originDeviceId',
+              lower: [originDeviceId],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'originDeviceId',
+              lower: [],
+              upper: [originDeviceId],
               includeUpper: false,
             ));
       }
@@ -1144,13 +1306,14 @@ extension ChangeLogQueryFilter
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationEqualTo(
-    ChangeOperation value, {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeEqualTo(
+    String value, {
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'operation',
+        property: r'operationType',
         value: value,
         caseSensitive: caseSensitive,
       ));
@@ -1158,46 +1321,48 @@ extension ChangeLogQueryFilter
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
-      operationGreaterThan(
-    ChangeOperation value, {
+      operationTypeGreaterThan(
+    String value, {
     bool include = false,
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.greaterThan(
         include: include,
-        property: r'operation',
+        property: r'operationType',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationLessThan(
-    ChangeOperation value, {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeLessThan(
+    String value, {
     bool include = false,
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.lessThan(
         include: include,
-        property: r'operation',
+        property: r'operationType',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationBetween(
-    ChangeOperation lower,
-    ChangeOperation upper, {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeBetween(
+    String lower,
+    String upper, {
     bool includeLower = true,
     bool includeUpper = true,
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.between(
-        property: r'operation',
+        property: r'operationType',
         lower: lower,
         includeLower: includeLower,
         upper: upper,
@@ -1207,70 +1372,71 @@ extension ChangeLogQueryFilter
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationStartsWith(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeStartsWith(
     String value, {
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.startsWith(
-        property: r'operation',
+        property: r'operationType',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationEndsWith(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeEndsWith(
     String value, {
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.endsWith(
-        property: r'operation',
+        property: r'operationType',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationContains(
-      String value,
-      {bool caseSensitive = true}) {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeContains(String value, {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.contains(
-        property: r'operation',
+        property: r'operationType',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationMatches(
-      String pattern,
-      {bool caseSensitive = true}) {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeMatches(String pattern, {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.matches(
-        property: r'operation',
+        property: r'operationType',
         wildcard: pattern,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> operationIsEmpty() {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
+      operationTypeIsEmpty() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'operation',
+        property: r'operationType',
         value: '',
       ));
     });
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
-      operationIsNotEmpty() {
+      operationTypeIsNotEmpty() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.greaterThan(
-        property: r'operation',
+        property: r'operationType',
         value: '',
       ));
     });
@@ -1412,20 +1578,20 @@ extension ChangeLogQueryFilter
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdEqualTo(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadEqualTo(
     String value, {
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'recordId',
+        property: r'payload',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdGreaterThan(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadGreaterThan(
     String value, {
     bool include = false,
     bool caseSensitive = true,
@@ -1433,14 +1599,14 @@ extension ChangeLogQueryFilter
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.greaterThan(
         include: include,
-        property: r'recordId',
+        property: r'payload',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdLessThan(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadLessThan(
     String value, {
     bool include = false,
     bool caseSensitive = true,
@@ -1448,14 +1614,14 @@ extension ChangeLogQueryFilter
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.lessThan(
         include: include,
-        property: r'recordId',
+        property: r'payload',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdBetween(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadBetween(
     String lower,
     String upper, {
     bool includeLower = true,
@@ -1464,7 +1630,7 @@ extension ChangeLogQueryFilter
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.between(
-        property: r'recordId',
+        property: r'payload',
         lower: lower,
         includeLower: includeLower,
         upper: upper,
@@ -1474,71 +1640,124 @@ extension ChangeLogQueryFilter
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdStartsWith(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadStartsWith(
     String value, {
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.startsWith(
-        property: r'recordId',
+        property: r'payload',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdEndsWith(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadEndsWith(
     String value, {
     bool caseSensitive = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.endsWith(
-        property: r'recordId',
+        property: r'payload',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdContains(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadContains(
       String value,
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.contains(
-        property: r'recordId',
+        property: r'payload',
         value: value,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdMatches(
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadMatches(
       String pattern,
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.matches(
-        property: r'recordId',
+        property: r'payload',
         wildcard: pattern,
         caseSensitive: caseSensitive,
       ));
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdIsEmpty() {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> payloadIsEmpty() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'recordId',
+        property: r'payload',
         value: '',
       ));
     });
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
-      recordIdIsNotEmpty() {
+      payloadIsNotEmpty() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.greaterThan(
-        property: r'recordId',
+        property: r'payload',
         value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdEqualTo(
+      int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'recordId',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'recordId',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'recordId',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> recordIdBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'recordId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
       ));
     });
   }
@@ -1554,7 +1773,7 @@ extension ChangeLogQueryFilter
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> timestampEqualTo(
-      DateTime value) {
+      int value) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
         property: r'timestamp',
@@ -1565,7 +1784,7 @@ extension ChangeLogQueryFilter
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition>
       timestampGreaterThan(
-    DateTime value, {
+    int value, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
@@ -1578,7 +1797,7 @@ extension ChangeLogQueryFilter
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> timestampLessThan(
-    DateTime value, {
+    int value, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
@@ -1591,8 +1810,8 @@ extension ChangeLogQueryFilter
   }
 
   QueryBuilder<ChangeLog, ChangeLog, QAfterFilterCondition> timestampBetween(
-    DateTime lower,
-    DateTime upper, {
+    int lower,
+    int upper, {
     bool includeLower = true,
     bool includeUpper = true,
   }) {
@@ -1651,15 +1870,15 @@ extension ChangeLogQuerySortBy on QueryBuilder<ChangeLog, ChangeLog, QSortBy> {
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> sortByOperation() {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> sortByOperationType() {
     return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'operation', Sort.asc);
+      return query.addSortBy(r'operationType', Sort.asc);
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> sortByOperationDesc() {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> sortByOperationTypeDesc() {
     return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'operation', Sort.desc);
+      return query.addSortBy(r'operationType', Sort.desc);
     });
   }
 
@@ -1672,6 +1891,18 @@ extension ChangeLogQuerySortBy on QueryBuilder<ChangeLog, ChangeLog, QSortBy> {
   QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> sortByOriginDeviceIdDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'originDeviceId', Sort.desc);
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> sortByPayload() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'payload', Sort.asc);
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> sortByPayloadDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'payload', Sort.desc);
     });
   }
 
@@ -1762,15 +1993,15 @@ extension ChangeLogQuerySortThenBy
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> thenByOperation() {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> thenByOperationType() {
     return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'operation', Sort.asc);
+      return query.addSortBy(r'operationType', Sort.asc);
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> thenByOperationDesc() {
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> thenByOperationTypeDesc() {
     return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'operation', Sort.desc);
+      return query.addSortBy(r'operationType', Sort.desc);
     });
   }
 
@@ -1783,6 +2014,18 @@ extension ChangeLogQuerySortThenBy
   QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> thenByOriginDeviceIdDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'originDeviceId', Sort.desc);
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> thenByPayload() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'payload', Sort.asc);
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QAfterSortBy> thenByPayloadDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'payload', Sort.desc);
     });
   }
 
@@ -1845,10 +2088,11 @@ extension ChangeLogQueryWhereDistinct
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QDistinct> distinctByOperation(
+  QueryBuilder<ChangeLog, ChangeLog, QDistinct> distinctByOperationType(
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'operation', caseSensitive: caseSensitive);
+      return query.addDistinctBy(r'operationType',
+          caseSensitive: caseSensitive);
     });
   }
 
@@ -1860,10 +2104,16 @@ extension ChangeLogQueryWhereDistinct
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeLog, QDistinct> distinctByRecordId(
+  QueryBuilder<ChangeLog, ChangeLog, QDistinct> distinctByPayload(
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'recordId', caseSensitive: caseSensitive);
+      return query.addDistinctBy(r'payload', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<ChangeLog, ChangeLog, QDistinct> distinctByRecordId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'recordId');
     });
   }
 
@@ -1906,10 +2156,9 @@ extension ChangeLogQueryProperty
     });
   }
 
-  QueryBuilder<ChangeLog, ChangeOperation, QQueryOperations>
-      operationProperty() {
+  QueryBuilder<ChangeLog, String, QQueryOperations> operationTypeProperty() {
     return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'operation');
+      return query.addPropertyName(r'operationType');
     });
   }
 
@@ -1919,7 +2168,13 @@ extension ChangeLogQueryProperty
     });
   }
 
-  QueryBuilder<ChangeLog, String, QQueryOperations> recordIdProperty() {
+  QueryBuilder<ChangeLog, String, QQueryOperations> payloadProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'payload');
+    });
+  }
+
+  QueryBuilder<ChangeLog, int, QQueryOperations> recordIdProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'recordId');
     });
@@ -1931,7 +2186,7 @@ extension ChangeLogQueryProperty
     });
   }
 
-  QueryBuilder<ChangeLog, DateTime, QQueryOperations> timestampProperty() {
+  QueryBuilder<ChangeLog, int, QQueryOperations> timestampProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'timestamp');
     });

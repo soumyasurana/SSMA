@@ -32,18 +32,13 @@ const ItemSchema = CollectionSchema(
       name: r'name',
       type: IsarType.string,
     ),
-    r'recordId': PropertySchema(
-      id: 3,
-      name: r'recordId',
-      type: IsarType.string,
-    ),
     r'updatedAt': PropertySchema(
-      id: 4,
+      id: 3,
       name: r'updatedAt',
-      type: IsarType.dateTime,
+      type: IsarType.long,
     ),
     r'version': PropertySchema(
-      id: 5,
+      id: 4,
       name: r'version',
       type: IsarType.long,
     )
@@ -54,16 +49,29 @@ const ItemSchema = CollectionSchema(
   deserializeProp: _itemDeserializeProp,
   idName: r'id',
   indexes: {
-    r'recordId': IndexSchema(
-      id: 907839981883940929,
-      name: r'recordId',
-      unique: true,
-      replace: true,
+    r'name': IndexSchema(
+      id: 879695947855722453,
+      name: r'name',
+      unique: false,
+      replace: false,
       properties: [
         IndexPropertySchema(
-          name: r'recordId',
-          type: IndexType.hash,
+          name: r'name',
+          type: IndexType.value,
           caseSensitive: true,
+        )
+      ],
+    ),
+    r'version': IndexSchema(
+      id: -3425991338577364869,
+      name: r'version',
+      unique: false,
+      replace: false,
+      properties: [
+        IndexPropertySchema(
+          name: r'version',
+          type: IndexType.value,
+          caseSensitive: false,
         )
       ],
     ),
@@ -80,16 +88,16 @@ const ItemSchema = CollectionSchema(
         )
       ],
     ),
-    r'version': IndexSchema(
-      id: -3425991338577364869,
-      name: r'version',
+    r'deviceId': IndexSchema(
+      id: 4442814072367132509,
+      name: r'deviceId',
       unique: false,
       replace: false,
       properties: [
         IndexPropertySchema(
-          name: r'version',
-          type: IndexType.value,
-          caseSensitive: false,
+          name: r'deviceId',
+          type: IndexType.hash,
+          caseSensitive: true,
         )
       ],
     ),
@@ -123,7 +131,6 @@ int _itemEstimateSize(
   var bytesCount = offsets.last;
   bytesCount += 3 + object.deviceId.length * 3;
   bytesCount += 3 + object.name.length * 3;
-  bytesCount += 3 + object.recordId.length * 3;
   return bytesCount;
 }
 
@@ -136,9 +143,8 @@ void _itemSerialize(
   writer.writeString(offsets[0], object.deviceId);
   writer.writeBool(offsets[1], object.isDeleted);
   writer.writeString(offsets[2], object.name);
-  writer.writeString(offsets[3], object.recordId);
-  writer.writeDateTime(offsets[4], object.updatedAt);
-  writer.writeLong(offsets[5], object.version);
+  writer.writeLong(offsets[3], object.updatedAt);
+  writer.writeLong(offsets[4], object.version);
 }
 
 Item _itemDeserialize(
@@ -152,9 +158,8 @@ Item _itemDeserialize(
   object.id = id;
   object.isDeleted = reader.readBool(offsets[1]);
   object.name = reader.readString(offsets[2]);
-  object.recordId = reader.readString(offsets[3]);
-  object.updatedAt = reader.readDateTime(offsets[4]);
-  object.version = reader.readLong(offsets[5]);
+  object.updatedAt = reader.readLong(offsets[3]);
+  object.version = reader.readLong(offsets[4]);
   return object;
 }
 
@@ -172,10 +177,8 @@ P _itemDeserializeProp<P>(
     case 2:
       return (reader.readString(offset)) as P;
     case 3:
-      return (reader.readString(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 4:
-      return (reader.readDateTime(offset)) as P;
-    case 5:
       return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -194,60 +197,6 @@ void _itemAttach(IsarCollection<dynamic> col, Id id, Item object) {
   object.id = id;
 }
 
-extension ItemByIndex on IsarCollection<Item> {
-  Future<Item?> getByRecordId(String recordId) {
-    return getByIndex(r'recordId', [recordId]);
-  }
-
-  Item? getByRecordIdSync(String recordId) {
-    return getByIndexSync(r'recordId', [recordId]);
-  }
-
-  Future<bool> deleteByRecordId(String recordId) {
-    return deleteByIndex(r'recordId', [recordId]);
-  }
-
-  bool deleteByRecordIdSync(String recordId) {
-    return deleteByIndexSync(r'recordId', [recordId]);
-  }
-
-  Future<List<Item?>> getAllByRecordId(List<String> recordIdValues) {
-    final values = recordIdValues.map((e) => [e]).toList();
-    return getAllByIndex(r'recordId', values);
-  }
-
-  List<Item?> getAllByRecordIdSync(List<String> recordIdValues) {
-    final values = recordIdValues.map((e) => [e]).toList();
-    return getAllByIndexSync(r'recordId', values);
-  }
-
-  Future<int> deleteAllByRecordId(List<String> recordIdValues) {
-    final values = recordIdValues.map((e) => [e]).toList();
-    return deleteAllByIndex(r'recordId', values);
-  }
-
-  int deleteAllByRecordIdSync(List<String> recordIdValues) {
-    final values = recordIdValues.map((e) => [e]).toList();
-    return deleteAllByIndexSync(r'recordId', values);
-  }
-
-  Future<Id> putByRecordId(Item object) {
-    return putByIndex(r'recordId', object);
-  }
-
-  Id putByRecordIdSync(Item object, {bool saveLinks = true}) {
-    return putByIndexSync(r'recordId', object, saveLinks: saveLinks);
-  }
-
-  Future<List<Id>> putAllByRecordId(List<Item> objects) {
-    return putAllByIndex(r'recordId', objects);
-  }
-
-  List<Id> putAllByRecordIdSync(List<Item> objects, {bool saveLinks = true}) {
-    return putAllByIndexSync(r'recordId', objects, saveLinks: saveLinks);
-  }
-}
-
 extension ItemQueryWhereSort on QueryBuilder<Item, Item, QWhere> {
   QueryBuilder<Item, Item, QAfterWhere> anyId() {
     return QueryBuilder.apply(this, (query) {
@@ -255,10 +204,10 @@ extension ItemQueryWhereSort on QueryBuilder<Item, Item, QWhere> {
     });
   }
 
-  QueryBuilder<Item, Item, QAfterWhere> anyUpdatedAt() {
+  QueryBuilder<Item, Item, QAfterWhere> anyName() {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(
-        const IndexWhereClause.any(indexName: r'updatedAt'),
+        const IndexWhereClause.any(indexName: r'name'),
       );
     });
   }
@@ -267,6 +216,14 @@ extension ItemQueryWhereSort on QueryBuilder<Item, Item, QWhere> {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(
         const IndexWhereClause.any(indexName: r'version'),
+      );
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhere> anyUpdatedAt() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(
+        const IndexWhereClause.any(indexName: r'updatedAt'),
       );
     });
   }
@@ -346,137 +303,137 @@ extension ItemQueryWhere on QueryBuilder<Item, Item, QWhereClause> {
     });
   }
 
-  QueryBuilder<Item, Item, QAfterWhereClause> recordIdEqualTo(String recordId) {
+  QueryBuilder<Item, Item, QAfterWhereClause> nameEqualTo(String name) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(IndexWhereClause.equalTo(
-        indexName: r'recordId',
-        value: [recordId],
+        indexName: r'name',
+        value: [name],
       ));
     });
   }
 
-  QueryBuilder<Item, Item, QAfterWhereClause> recordIdNotEqualTo(
-      String recordId) {
+  QueryBuilder<Item, Item, QAfterWhereClause> nameNotEqualTo(String name) {
     return QueryBuilder.apply(this, (query) {
       if (query.whereSort == Sort.asc) {
         return query
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
+              indexName: r'name',
               lower: [],
-              upper: [recordId],
+              upper: [name],
               includeUpper: false,
             ))
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
-              lower: [recordId],
+              indexName: r'name',
+              lower: [name],
               includeLower: false,
               upper: [],
             ));
       } else {
         return query
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
-              lower: [recordId],
+              indexName: r'name',
+              lower: [name],
               includeLower: false,
               upper: [],
             ))
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'recordId',
+              indexName: r'name',
               lower: [],
-              upper: [recordId],
+              upper: [name],
               includeUpper: false,
             ));
       }
     });
   }
 
-  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtEqualTo(
-      DateTime updatedAt) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addWhereClause(IndexWhereClause.equalTo(
-        indexName: r'updatedAt',
-        value: [updatedAt],
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtNotEqualTo(
-      DateTime updatedAt) {
-    return QueryBuilder.apply(this, (query) {
-      if (query.whereSort == Sort.asc) {
-        return query
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'updatedAt',
-              lower: [],
-              upper: [updatedAt],
-              includeUpper: false,
-            ))
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'updatedAt',
-              lower: [updatedAt],
-              includeLower: false,
-              upper: [],
-            ));
-      } else {
-        return query
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'updatedAt',
-              lower: [updatedAt],
-              includeLower: false,
-              upper: [],
-            ))
-            .addWhereClause(IndexWhereClause.between(
-              indexName: r'updatedAt',
-              lower: [],
-              upper: [updatedAt],
-              includeUpper: false,
-            ));
-      }
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtGreaterThan(
-    DateTime updatedAt, {
+  QueryBuilder<Item, Item, QAfterWhereClause> nameGreaterThan(
+    String name, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(IndexWhereClause.between(
-        indexName: r'updatedAt',
-        lower: [updatedAt],
+        indexName: r'name',
+        lower: [name],
         includeLower: include,
         upper: [],
       ));
     });
   }
 
-  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtLessThan(
-    DateTime updatedAt, {
+  QueryBuilder<Item, Item, QAfterWhereClause> nameLessThan(
+    String name, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(IndexWhereClause.between(
-        indexName: r'updatedAt',
+        indexName: r'name',
         lower: [],
-        upper: [updatedAt],
+        upper: [name],
         includeUpper: include,
       ));
     });
   }
 
-  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtBetween(
-    DateTime lowerUpdatedAt,
-    DateTime upperUpdatedAt, {
+  QueryBuilder<Item, Item, QAfterWhereClause> nameBetween(
+    String lowerName,
+    String upperName, {
     bool includeLower = true,
     bool includeUpper = true,
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(IndexWhereClause.between(
-        indexName: r'updatedAt',
-        lower: [lowerUpdatedAt],
+        indexName: r'name',
+        lower: [lowerName],
         includeLower: includeLower,
-        upper: [upperUpdatedAt],
+        upper: [upperName],
         includeUpper: includeUpper,
       ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> nameStartsWith(
+      String NamePrefix) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.between(
+        indexName: r'name',
+        lower: [NamePrefix],
+        upper: ['$NamePrefix\u{FFFFF}'],
+      ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> nameIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'name',
+        value: [''],
+      ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> nameIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.lessThan(
+              indexName: r'name',
+              upper: [''],
+            ))
+            .addWhereClause(IndexWhereClause.greaterThan(
+              indexName: r'name',
+              lower: [''],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.greaterThan(
+              indexName: r'name',
+              lower: [''],
+            ))
+            .addWhereClause(IndexWhereClause.lessThan(
+              indexName: r'name',
+              upper: [''],
+            ));
+      }
     });
   }
 
@@ -565,6 +522,139 @@ extension ItemQueryWhere on QueryBuilder<Item, Item, QWhereClause> {
         upper: [upperVersion],
         includeUpper: includeUpper,
       ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtEqualTo(int updatedAt) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'updatedAt',
+        value: [updatedAt],
+      ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtNotEqualTo(
+      int updatedAt) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'updatedAt',
+              lower: [],
+              upper: [updatedAt],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'updatedAt',
+              lower: [updatedAt],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'updatedAt',
+              lower: [updatedAt],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'updatedAt',
+              lower: [],
+              upper: [updatedAt],
+              includeUpper: false,
+            ));
+      }
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtGreaterThan(
+    int updatedAt, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.between(
+        indexName: r'updatedAt',
+        lower: [updatedAt],
+        includeLower: include,
+        upper: [],
+      ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtLessThan(
+    int updatedAt, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.between(
+        indexName: r'updatedAt',
+        lower: [],
+        upper: [updatedAt],
+        includeUpper: include,
+      ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> updatedAtBetween(
+    int lowerUpdatedAt,
+    int upperUpdatedAt, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.between(
+        indexName: r'updatedAt',
+        lower: [lowerUpdatedAt],
+        includeLower: includeLower,
+        upper: [upperUpdatedAt],
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> deviceIdEqualTo(String deviceId) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'deviceId',
+        value: [deviceId],
+      ));
+    });
+  }
+
+  QueryBuilder<Item, Item, QAfterWhereClause> deviceIdNotEqualTo(
+      String deviceId) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'deviceId',
+              lower: [],
+              upper: [deviceId],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'deviceId',
+              lower: [deviceId],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'deviceId',
+              lower: [deviceId],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'deviceId',
+              lower: [],
+              upper: [deviceId],
+              includeUpper: false,
+            ));
+      }
     });
   }
 
@@ -932,137 +1022,7 @@ extension ItemQueryFilter on QueryBuilder<Item, Item, QFilterCondition> {
     });
   }
 
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdEqualTo(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'recordId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdGreaterThan(
-    String value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        include: include,
-        property: r'recordId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdLessThan(
-    String value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.lessThan(
-        include: include,
-        property: r'recordId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdBetween(
-    String lower,
-    String upper, {
-    bool includeLower = true,
-    bool includeUpper = true,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.between(
-        property: r'recordId',
-        lower: lower,
-        includeLower: includeLower,
-        upper: upper,
-        includeUpper: includeUpper,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdStartsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.startsWith(
-        property: r'recordId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdEndsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.endsWith(
-        property: r'recordId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdContains(String value,
-      {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.contains(
-        property: r'recordId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdMatches(
-      String pattern,
-      {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.matches(
-        property: r'recordId',
-        wildcard: pattern,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdIsEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'recordId',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> recordIdIsNotEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        property: r'recordId',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterFilterCondition> updatedAtEqualTo(
-      DateTime value) {
+  QueryBuilder<Item, Item, QAfterFilterCondition> updatedAtEqualTo(int value) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
         property: r'updatedAt',
@@ -1072,7 +1032,7 @@ extension ItemQueryFilter on QueryBuilder<Item, Item, QFilterCondition> {
   }
 
   QueryBuilder<Item, Item, QAfterFilterCondition> updatedAtGreaterThan(
-    DateTime value, {
+    int value, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
@@ -1085,7 +1045,7 @@ extension ItemQueryFilter on QueryBuilder<Item, Item, QFilterCondition> {
   }
 
   QueryBuilder<Item, Item, QAfterFilterCondition> updatedAtLessThan(
-    DateTime value, {
+    int value, {
     bool include = false,
   }) {
     return QueryBuilder.apply(this, (query) {
@@ -1098,8 +1058,8 @@ extension ItemQueryFilter on QueryBuilder<Item, Item, QFilterCondition> {
   }
 
   QueryBuilder<Item, Item, QAfterFilterCondition> updatedAtBetween(
-    DateTime lower,
-    DateTime upper, {
+    int lower,
+    int upper, {
     bool includeLower = true,
     bool includeUpper = true,
   }) {
@@ -1208,18 +1168,6 @@ extension ItemQuerySortBy on QueryBuilder<Item, Item, QSortBy> {
     });
   }
 
-  QueryBuilder<Item, Item, QAfterSortBy> sortByRecordId() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'recordId', Sort.asc);
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterSortBy> sortByRecordIdDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'recordId', Sort.desc);
-    });
-  }
-
   QueryBuilder<Item, Item, QAfterSortBy> sortByUpdatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'updatedAt', Sort.asc);
@@ -1294,18 +1242,6 @@ extension ItemQuerySortThenBy on QueryBuilder<Item, Item, QSortThenBy> {
     });
   }
 
-  QueryBuilder<Item, Item, QAfterSortBy> thenByRecordId() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'recordId', Sort.asc);
-    });
-  }
-
-  QueryBuilder<Item, Item, QAfterSortBy> thenByRecordIdDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'recordId', Sort.desc);
-    });
-  }
-
   QueryBuilder<Item, Item, QAfterSortBy> thenByUpdatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'updatedAt', Sort.asc);
@@ -1352,13 +1288,6 @@ extension ItemQueryWhereDistinct on QueryBuilder<Item, Item, QDistinct> {
     });
   }
 
-  QueryBuilder<Item, Item, QDistinct> distinctByRecordId(
-      {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'recordId', caseSensitive: caseSensitive);
-    });
-  }
-
   QueryBuilder<Item, Item, QDistinct> distinctByUpdatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'updatedAt');
@@ -1397,13 +1326,7 @@ extension ItemQueryProperty on QueryBuilder<Item, Item, QQueryProperty> {
     });
   }
 
-  QueryBuilder<Item, String, QQueryOperations> recordIdProperty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'recordId');
-    });
-  }
-
-  QueryBuilder<Item, DateTime, QQueryOperations> updatedAtProperty() {
+  QueryBuilder<Item, int, QQueryOperations> updatedAtProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'updatedAt');
     });

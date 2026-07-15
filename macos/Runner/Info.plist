@@ -28,5 +28,13 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+
+	<!-- Required for Bonjour/mDNS service advertisement and discovery -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_ssmasync._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>SSMA uses local network access to discover and sync with nearby devices running the same app.</string>
 </dict>
 </plist>

@@ -1,64 +1,64 @@
+import 'dart:convert';
 import 'package:isar/isar.dart';
-import 'package:uuid/uuid.dart';
 
 part 'change_log.g.dart';
 
-enum ChangeOperation {
-  create,
-  update,
-  delete,
-}
-
 @collection
 class ChangeLog {
-  ChangeLog();
-
-  ChangeLog.create({
-    required this.collection,
-    required this.recordId,
-    required this.operation,
-    required this.timestamp,
-    required this.originDeviceId,
-    required this.changeSeq,
-    String? opId,
-    this.synced = false,
-  }) : opId = opId ?? const Uuid().v4();
-
   Id id = Isar.autoIncrement;
 
-  @Index()
-  late String collection;
+  @Index(unique: true, replace: true)
+  late String opId; // Globally unique opId
 
   @Index()
-  late String recordId;
-
-  @Index(unique: true, replace: false)
-  late String opId;
-
-  @Enumerated(EnumType.name)
-  late ChangeOperation operation;
+  late int changeSeq; // Monotonically increasing local changeSeq
 
   @Index()
-  late int changeSeq;
+  late String collection; // E.g., 'Item'
 
   @Index()
-  late DateTime timestamp;
+  late int recordId; // Target record ID
 
   @Index()
-  bool synced = false;
+  late String operationType; // CREATE, UPDATE, DELETE
 
-  late String originDeviceId;
+  late String payload; // JSON serialized payload
 
-  Map<String, dynamic> toSyncJson(Map<String, dynamic>? payload) {
+  @Index()
+  late int timestamp; // Milliseconds since epoch
+
+  @Index()
+  late bool synced; // Has this been fully propagated?
+
+  @Index()
+  late String originDeviceId; // Device that generated the change
+
+  Map<String, dynamic> toJson() {
     return {
-      'collection': collection,
-      'recordId': recordId,
+      'id': id,
       'opId': opId,
       'changeSeq': changeSeq,
-      'operation': operation.name,
-      'timestamp': timestamp.toIso8601String(),
-      'originDeviceId': originDeviceId,
+      'collection': collection,
+      'recordId': recordId,
+      'operationType': operationType,
       'payload': payload,
+      'timestamp': timestamp,
+      'synced': synced,
+      'originDeviceId': originDeviceId,
     };
+  }
+
+  static ChangeLog fromJson(Map<String, dynamic> json) {
+    return ChangeLog()
+      ..id = json['id'] as int? ?? Isar.autoIncrement
+      ..opId = json['opId'] as String
+      ..changeSeq = json['changeSeq'] as int
+      ..collection = json['collection'] as String
+      ..recordId = json['recordId'] as int
+      ..operationType = json['operationType'] as String
+      ..payload = json['payload'] as String
+      ..timestamp = json['timestamp'] as int
+      ..synced = json['synced'] as bool
+      ..originDeviceId = json['originDeviceId'] as String;
   }
 }

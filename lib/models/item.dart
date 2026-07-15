@@ -1,59 +1,44 @@
 import 'package:isar/isar.dart';
-import 'package:uuid/uuid.dart';
 
 part 'item.g.dart';
 
 @collection
 class Item {
-  Item();
-
-  Item.create({
-    required this.name,
-    required this.deviceId,
-  }) {
-    recordId = const Uuid().v4();
-    updatedAt = DateTime.now().toUtc();
-    version = 1;
-    isDeleted = false;
-  }
-
   Id id = Isar.autoIncrement;
 
-  // Stable identifier used across devices and changelogs.
-  @Index(unique: true, replace: true)
-  late String recordId;
-
+  @Index(type: IndexType.value)
   late String name;
 
   @Index()
-  DateTime updatedAt = DateTime.now().toUtc();
+  late int version;
 
   @Index()
-  int version = 0;
+  late int updatedAt; // Stored as millisecondsSinceEpoch
 
   @Index()
-  bool isDeleted = false;
-
   late String deviceId;
 
-  Map<String, dynamic> toSyncJson() {
+  @Index()
+  late bool isDeleted;
+
+  Map<String, dynamic> toJson() {
     return {
-      'recordId': recordId,
+      'id': id,
       'name': name,
-      'updatedAt': updatedAt.toIso8601String(),
       'version': version,
-      'isDeleted': isDeleted,
+      'updatedAt': updatedAt,
       'deviceId': deviceId,
+      'isDeleted': isDeleted,
     };
   }
 
-  static Item fromSyncJson(Map<String, dynamic> json) {
+  static Item fromJson(Map<String, dynamic> json) {
     return Item()
-      ..recordId = json['recordId'] as String
+      ..id = json['id'] as int? ?? Isar.autoIncrement
       ..name = json['name'] as String
-      ..updatedAt = DateTime.parse(json['updatedAt'] as String).toUtc()
-      ..version = (json['version'] as num?)?.toInt() ?? 0
-      ..isDeleted = json['isDeleted'] as bool? ?? false
-      ..deviceId = json['deviceId'] as String;
+      ..version = json['version'] as int
+      ..updatedAt = json['updatedAt'] as int
+      ..deviceId = json['deviceId'] as String
+      ..isDeleted = json['isDeleted'] as bool;
   }
 }

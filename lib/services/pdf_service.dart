@@ -36,7 +36,7 @@ class PDFService {
 
     pw.ImageProvider? logo;
     try {
-      final imageBytes = await rootBundle.load('assets/logo.png');
+      final imageBytes = await rootBundle.load('assets/logo_app.png');
       logo = pw.MemoryImage(imageBytes.buffer.asUint8List());
     } catch (_) {
       logo = null;
@@ -115,7 +115,7 @@ class PDFService {
                   child: pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
-                      pw.Text('ABCDEF',
+                      pw.Text('Surana Electronix',
                           style: pw.TextStyle(font: boldFont, fontSize: 22, color: primaryColor)),
                       pw.Text('Shop No. 250',
                           style: pw.TextStyle(font: font, fontSize: 10, color: PdfColors.grey700)),
@@ -202,7 +202,7 @@ class PDFService {
             pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
-                pw.Text('ABCDEF — Thank you for your business!',
+                pw.Text('Surana Electronix — Thank you for your business!',
                     style: pw.TextStyle(font: font, fontSize: 9, color: PdfColors.grey600)),
                 pw.Text('Page ${context.pageNumber} of ${context.pagesCount}',
                     style: pw.TextStyle(font: font, fontSize: 9, color: PdfColors.grey600)),
