@@ -9,7 +9,7 @@ class Customer {
   Id isarId = Isar.autoIncrement;
 
   // Global sync ID (UUID)
-  late String uuid;
+  String uuid = const Uuid().v4();
 
   late String name;
   String? phone;
@@ -17,7 +17,7 @@ class Customer {
 
   // Sync fields
   int version = 1;
-  late String deviceId;
+  String deviceId = 'unknown';
   bool isSynced = false;
   bool deleted = false;
 

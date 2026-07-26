@@ -95,15 +95,27 @@ class DBService {
   static Future<void> _putProductSafe(Product product) async {
     final uuidValue = product.uuid.trim();
     if (uuidValue.isEmpty) {
-      // Existing legacy rows may not have UUID populated.
-      // Update by Isar ID in that case to avoid creating a duplicate row.
-      if (product.isarId != Isar.autoIncrement) {
-        await isar.products.put(product);
-        return;
-      }
       product.uuid = _uuid.v4();
     }
-    await isar.products.putByUuid(product);
+
+    if (product.deviceId.trim().isEmpty || product.deviceId == 'unknown') {
+      product.deviceId = syncV2?.deviceId ?? 'unknown';
+    }
+
+    if (product.isarId != Isar.autoIncrement) {
+      await isar.products.put(product);
+    } else {
+      await isar.products.putByUuid(product);
+    }
+  }
+
+  static void _ensureCustomerSyncFields(Customer customer) {
+    if (customer.uuid.trim().isEmpty) {
+      customer.uuid = _uuid.v4();
+    }
+    if (customer.deviceId.trim().isEmpty || customer.deviceId == 'unknown') {
+      customer.deviceId = syncV2?.deviceId ?? 'unknown';
+    }
   }
 
   static Future<void> initializeIsar() async {
@@ -351,6 +363,7 @@ class DBService {
     customer.createdAt = DateTime.now();
     customer.updatedAt = DateTime.now();
     customer.deleted = false;
+    _ensureCustomerSyncFields(customer);
 
     await isar.writeTxn(() async {
       await isar.customers.put(customer);
@@ -366,6 +379,7 @@ class DBService {
 
   static Future<void> updateCustomer(Customer customer) async {
     customer.updatedAt = DateTime.now();
+    _ensureCustomerSyncFields(customer);
     await isar.writeTxn(() async {
       await isar.customers.put(customer);
       await _appendChangeLog(

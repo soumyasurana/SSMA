@@ -136,14 +136,17 @@ Future<void> _processExcel(Uint8List bytes) async {
 }
   Future<void> _loadProducts() async {
     final products = await DBService.getProducts();
+    final query = _searchController.text.toLowerCase();
     setState(() {
       _products = products;
-      _filteredProducts = products;
+      _filteredProducts = query.isEmpty
+          ? products
+          : products.where((p) => p.name.toLowerCase().contains(query)).toList();
     });
   }
 
   void _filterProducts(String query) {
-    final q = query.toLowerCase();
+    final q = query.trim().toLowerCase();
     setState(() {
       _filteredProducts =
           _products.where((p) => p.name.toLowerCase().contains(q)).toList();

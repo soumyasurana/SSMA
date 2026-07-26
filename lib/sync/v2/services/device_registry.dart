@@ -54,7 +54,12 @@ class DeviceRegistry {
           ..connectionStatus = 'unknown'
           ..isPaired = false
           ..registeredAtMs = DateTime.now().millisecondsSinceEpoch
-          ..osVersion = osVersion;
+          ..osVersion = osVersion
+          // Dart bool defaults to false; set permission flags explicitly so
+          // that getAutoSyncTargets() correctly returns this device after pairing.
+          ..receiveEnabled = true
+          ..sendEnabled = true
+          ..autoSyncEnabled = true;
 
         debugPrint(
             '[DeviceRegistry]: ✨ new device registered: $deviceId ($deviceName)');
@@ -150,6 +155,12 @@ class DeviceRegistry {
   // -----------------------------------------------------------------------
 
   /// Marks a device as paired and trusted.
+  ///
+  /// Also ensures [receiveEnabled], [sendEnabled], and [autoSyncEnabled] are
+  /// set to true. This acts as a migration for devices already in the
+  /// database that may have been registered with false defaults before the
+  /// upsertDevice fix. Without this, a freshly-paired device would still be
+  /// skipped by getAutoSyncTargets() until the user manually toggled the flags.
   Future<void> pairDevice(String deviceId) async {
     await isar.writeTxn(() async {
       final device =
@@ -157,6 +168,12 @@ class DeviceRegistry {
       if (device != null) {
         device.isPaired = true;
         device.pairedAtMs = DateTime.now().millisecondsSinceEpoch;
+        // Ensure permission flags are true — a device stored with false defaults
+        // (before the upsertDevice fix) would otherwise never appear in
+        // getAutoSyncTargets() and would silently skip all automatic syncing.
+        device.receiveEnabled = true;
+        device.sendEnabled = true;
+        device.autoSyncEnabled = true;
         await isar.peerDevices.put(device);
         debugPrint('[DeviceRegistry]: ✅ Device $deviceId is now paired');
       } else {
@@ -285,6 +302,28 @@ class DeviceRegistry {
     String? targetDeviceId,
     String? targetDeviceName,
   }) async {
+    // Pairing requests are retried when a response is delayed.  Keep one
+    // pending record per direction/device instead of filling the UI with
+    // duplicates and making callback resolution ambiguous.
+    final existing = await (isInitiator
+        ? isar.pairingRequests
+            .filter()
+            .isInitiatorEqualTo(true)
+            .and()
+            .targetDeviceIdEqualTo(targetDeviceId ?? '')
+            .and()
+            .statusEqualTo('pending')
+            .findFirst()
+        : isar.pairingRequests
+            .filter()
+            .isInitiatorEqualTo(false)
+            .and()
+            .initiatorDeviceIdEqualTo(initiatorDeviceId)
+            .and()
+            .statusEqualTo('pending')
+            .findFirst());
+    if (existing != null) return existing;
+
     final request = PairingRequest()
       ..requestId = const Uuid().v4()
       ..initiatorDeviceId = initiatorDeviceId
@@ -300,6 +339,19 @@ class DeviceRegistry {
 
     await isar.writeTxn(() => isar.pairingRequests.put(request));
     return request;
+  }
+
+  /// Marks an outbound request as failed when it could not be delivered.
+  /// This avoids a permanently pending request that the peer never received.
+  Future<void> failOutboundRequest(String targetDeviceId) async {
+    await isar.writeTxn(() async {
+      final request = await getOutboundRequestFor(targetDeviceId);
+      if (request != null) {
+        request.status = 'failed';
+        request.respondedAtMs = DateTime.now().millisecondsSinceEpoch;
+        await isar.pairingRequests.put(request);
+      }
+    });
   }
 
   Future<List<PairingRequest>> getPendingPairingRequests() =>

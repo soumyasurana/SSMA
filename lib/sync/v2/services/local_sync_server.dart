@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -35,6 +36,7 @@ class LocalSyncServer {
   final ChangeProcessor changeProcessor;
   final CursorManager cursorManager;
   final DeviceRegistry deviceRegistry;
+  final Future<void> Function(String deviceId)? onPairingAccepted;
 
   HttpServer? _server;
 
@@ -49,6 +51,7 @@ class LocalSyncServer {
     required this.changeProcessor,
     required this.cursorManager,
     required this.deviceRegistry,
+    this.onPairingAccepted,
   });
 
   // -----------------------------------------------------------------------
@@ -225,7 +228,9 @@ class LocalSyncServer {
             headers: {'Content-Type': 'application/json'});
       }
 
-      // Verify permissions: can we receive from this device?
+      // Permission check: does this device allow receiving data from the sender?
+      // peer.receiveEnabled is OUR local flag — if false, we reject incoming
+      // pushes from that device regardless of what the sender thinks.
       final peer = await deviceRegistry.getDevice(senderDeviceId);
       if (peer != null && !peer.receiveEnabled) {
         return Response.forbidden(
@@ -237,7 +242,8 @@ class LocalSyncServer {
       }
 
       final changes = rawChanges
-          .map((e) => SyncChangeLog.fromJson(e as Map<String, dynamic>))
+          .map((e) =>
+              SyncChangeLog.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
 
       final result = await changeProcessor.processBatch(changes);
@@ -262,6 +268,14 @@ class LocalSyncServer {
   // POST /sync/v2/pair/request
   // -----------------------------------------------------------------------
 
+  static String _cleanIp(String ip) {
+    var cleaned = ip.trim();
+    if (cleaned.startsWith('::ffff:')) {
+      cleaned = cleaned.substring(7);
+    }
+    return cleaned;
+  }
+
   Future<Response> _pairRequestHandler(Request request) async {
     try {
       final body =
@@ -274,9 +288,10 @@ class LocalSyncServer {
 
       final connInfo =
           request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
-      final initiatorIp = request.headers['x-forwarded-for'] ??
+      final rawIp = request.headers['x-forwarded-for'] ??
           connInfo?.remoteAddress.address ??
           'unknown';
+      final initiatorIp = _cleanIp(rawIp);
 
       if (initiatorDeviceId == null) {
         return Response.badRequest(
@@ -333,6 +348,13 @@ class LocalSyncServer {
       }
 
       await deviceRegistry.resolveOutboundRequest(responderDeviceId, accepted);
+      // Pairing is now trusted on both devices: the responder paired the
+      // initiator before sending this callback, and resolveOutboundRequest
+      // paired the responder locally. Start transfer here so it does not
+      // depend on a settings-screen timer or the next periodic sync.
+      if (accepted && onPairingAccepted != null) {
+        unawaited(onPairingAccepted!(responderDeviceId));
+      }
 
       return _json({'status': accepted ? 'accepted' : 'rejected'});
     } catch (e) {

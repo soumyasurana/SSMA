@@ -145,6 +145,9 @@ class ChangeProcessor {
           errors++;
           debugPrint(
               '[ChangeProcessor]: ⚠ no handler for entityType="${change.entityType}"');
+          // The receive cursor is a contiguous watermark.  Moving it beyond
+          // an entry we cannot understand would permanently drop that entry.
+          break;
         } else {
           switch (result) {
             case _ApplyResult.applied:
@@ -159,15 +162,17 @@ class ChangeProcessor {
             case _ApplyResult.unknownType:
               break;
           }
+          // Applied, duplicate and conflict entries have all been durably
+          // handled, so it is safe to include them in the contiguous cursor.
+          lastProcessedSeq = change.changeSeq;
         }
       } catch (e, st) {
         errors++;
         debugPrint(
             '[ChangeProcessor]: ❌ error on changeId=${change.changeId}: $e\n$st');
-      } finally {
-        // Keep moving forward so one malformed row does not stall the entire
-        // batch on every retry.
-        lastProcessedSeq = change.changeSeq;
+        // Do not process later rows: a cursor may only acknowledge a
+        // contiguous prefix of the remote journal.
+        break;
       }
     }
 

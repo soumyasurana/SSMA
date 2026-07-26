@@ -1,70 +1,95 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:ssma/models/item.dart';
-import 'package:ssma/sync/conflict_resolver.dart';
+import 'package:ssma/sync/v2/services/conflict_resolver.dart';
+
+ConflictContext _context({
+  required int incomingVersion,
+  required int existingVersion,
+  required int incomingUpdatedAtMs,
+  required int existingUpdatedAtMs,
+  required String incomingDeviceId,
+  required String existingDeviceId,
+}) =>
+    ConflictContext(
+      entityType: 'Product',
+      entityId: 'product-1',
+      incomingVersion: incomingVersion,
+      existingVersion: existingVersion,
+      incomingUpdatedAtMs: incomingUpdatedAtMs,
+      existingUpdatedAtMs: existingUpdatedAtMs,
+      incomingDeviceId: incomingDeviceId,
+      existingDeviceId: existingDeviceId,
+    );
 
 void main() {
   group('ConflictResolver', () {
-    test('Incoming item should win if existing is null', () {
-      final incoming = Item()
-        ..version = 1
-        ..updatedAt = 1000
-        ..deviceId = 'deviceA';
-
-      final result = ConflictResolver.shouldApplyIncoming(null, incoming);
-      expect(result, isTrue);
-    });
-
     test('Higher version should win', () {
-      final existing = Item()
-        ..version = 1
-        ..updatedAt = 2000
-        ..deviceId = 'deviceB';
-
-      final incoming = Item()
-        ..version = 2
-        ..updatedAt = 1000 // Even if older
-        ..deviceId = 'deviceA';
-
-      final result = ConflictResolver.shouldApplyIncoming(existing, incoming);
+      final resolver = ConflictResolver();
+      final result = resolver.shouldApplyIncoming(_context(
+        incomingVersion: 2,
+        existingVersion: 1,
+        incomingUpdatedAtMs: 1000,
+        existingUpdatedAtMs: 2000,
+        incomingDeviceId: 'deviceA',
+        existingDeviceId: 'deviceB',
+      ));
       expect(result, isTrue);
 
-      final resultReverse = ConflictResolver.shouldApplyIncoming(incoming, existing);
+      final resultReverse = resolver.shouldApplyIncoming(_context(
+        incomingVersion: 1,
+        existingVersion: 2,
+        incomingUpdatedAtMs: 2000,
+        existingUpdatedAtMs: 1000,
+        incomingDeviceId: 'deviceB',
+        existingDeviceId: 'deviceA',
+      ));
       expect(resultReverse, isFalse);
     });
 
     test('Tie breaker: newer updatedAt wins if versions are equal', () {
-      final existing = Item()
-        ..version = 1
-        ..updatedAt = 1000
-        ..deviceId = 'deviceB';
-
-      final incoming = Item()
-        ..version = 1
-        ..updatedAt = 2000
-        ..deviceId = 'deviceA';
-
-      final result = ConflictResolver.shouldApplyIncoming(existing, incoming);
+      final resolver = ConflictResolver();
+      final result = resolver.shouldApplyIncoming(_context(
+        incomingVersion: 1,
+        existingVersion: 1,
+        incomingUpdatedAtMs: 2000,
+        existingUpdatedAtMs: 1000,
+        incomingDeviceId: 'deviceA',
+        existingDeviceId: 'deviceB',
+      ));
       expect(result, isTrue);
 
-      final resultReverse = ConflictResolver.shouldApplyIncoming(incoming, existing);
+      final resultReverse = resolver.shouldApplyIncoming(_context(
+        incomingVersion: 1,
+        existingVersion: 1,
+        incomingUpdatedAtMs: 1000,
+        existingUpdatedAtMs: 2000,
+        incomingDeviceId: 'deviceB',
+        existingDeviceId: 'deviceA',
+      ));
       expect(resultReverse, isFalse);
     });
 
-    test('Final tie breaker: lexicographically larger deviceId wins if version and updatedAt are equal', () {
-      final existing = Item()
-        ..version = 1
-        ..updatedAt = 1000
-        ..deviceId = 'deviceA';
-
-      final incoming = Item()
-        ..version = 1
-        ..updatedAt = 1000
-        ..deviceId = 'deviceB'; // 'deviceB' > 'deviceA'
-
-      final result = ConflictResolver.shouldApplyIncoming(existing, incoming);
+    test(
+        'Final tie breaker: lexicographically larger deviceId wins if version and updatedAt are equal',
+        () {
+      final resolver = ConflictResolver();
+      final result = resolver.shouldApplyIncoming(_context(
+        incomingVersion: 1,
+        existingVersion: 1,
+        incomingUpdatedAtMs: 1000,
+        existingUpdatedAtMs: 1000,
+        incomingDeviceId: 'deviceB',
+        existingDeviceId: 'deviceA',
+      ));
       expect(result, isTrue); // 'deviceB' is lexicographically larger
 
-      final resultReverse = ConflictResolver.shouldApplyIncoming(incoming, existing);
+      final resultReverse = resolver.shouldApplyIncoming(_context(
+        incomingVersion: 1,
+        existingVersion: 1,
+        incomingUpdatedAtMs: 1000,
+        existingUpdatedAtMs: 1000,
+        incomingDeviceId: 'deviceA',
+        existingDeviceId: 'deviceB',
+      ));
       expect(resultReverse, isFalse);
     });
   });

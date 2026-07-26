@@ -53,6 +53,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
   String get deviceId => _deviceId ?? 'uninitialized';
   String get deviceName => _deviceName ?? 'This Device';
   bool _initialized = false;
+  Timer? _debouncedSyncTimer;
 
   SyncInitializerV2({this.port = 8080});
 
@@ -86,6 +87,15 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     // 2b. Backfill the v2 journal for legacy rows that predate sync v2.
     await DBService.backfillSyncV2Journal(changeJournal);
 
+    // 2c. Migration: ensure permission flags are true for devices that were
+    // stored before the upsertDevice fix (which explicitly sets the bool
+    // defaults). Dart bool defaults to false, so any PeerDevice written by
+    // the old code has receiveEnabled=false / sendEnabled=false /
+    // autoSyncEnabled=false on disk. Without this migration those devices
+    // would never appear in getAutoSyncTargets() and would silently skip all
+    // automatic syncing even though they are already paired.
+    await _migratePermissionFlags();
+
     // 3. Sync manager
     syncManager = SyncManager(
       isar: isar,
@@ -101,6 +111,14 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     EntityRegistry.registerAll(isar: isar);
 
     // 5. Local HTTP server
+    //
+    // IMPORTANT: set _initialized before starting the server so that the
+    // onPairingAccepted callback (which is invoked by the server's
+    // pair/respond handler) sees _initialized = true and actually triggers
+    // the first post-pairing sync. If _initialized were set afterwards
+    // a fast peer response would silently skip the sync.
+    _initialized = true;
+
     syncServer = LocalSyncServer(
       port: port,
       localDeviceId: _deviceId!,
@@ -112,6 +130,11 @@ class SyncInitializerV2 with WidgetsBindingObserver {
       changeProcessor: changeProcessor,
       cursorManager: cursorManager,
       deviceRegistry: deviceRegistry,
+      onPairingAccepted: (deviceId) async {
+        if (_initialized) {
+          await syncManager.syncWithDevice(deviceId);
+        }
+      },
     );
     await syncServer.start();
 
@@ -130,13 +153,13 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     // 7. App lifecycle observer (trigger sync on resume)
     WidgetsBinding.instance.addObserver(this);
 
-    _initialized = true;
-
     debugPrint(
         '[SyncInitializerV2]: ✅ initialized — deviceId=$_deviceId port=$port');
   }
 
   Future<void> shutdown() async {
+    _debouncedSyncTimer?.cancel();
+    _debouncedSyncTimer = null;
     WidgetsBinding.instance.removeObserver(this);
     await discoveryService.stop();
     await syncServer.stop();
@@ -190,6 +213,33 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     _deviceName = newName;
   }
 
+  /// One-time startup migration: ensures all PeerDevice records have correct
+  /// permission flag defaults. Devices stored by the old code had
+  /// receiveEnabled / sendEnabled / autoSyncEnabled = false (Dart bool default)
+  /// because upsertDevice never set them explicitly. This repairs those rows
+  /// so they appear in getAutoSyncTargets() and auto-sync correctly.
+  Future<void> _migratePermissionFlags() async {
+    final allDevices = await deviceRegistry.getAllDevices();
+    int fixed = 0;
+    for (final device in allDevices) {
+      if (!device.receiveEnabled ||
+          !device.sendEnabled ||
+          !device.autoSyncEnabled) {
+        await deviceRegistry.updatePermissions(
+          device.deviceId,
+          receiveEnabled: true,
+          sendEnabled: true,
+          autoSyncEnabled: true,
+        );
+        fixed++;
+      }
+    }
+    if (fixed > 0) {
+      debugPrint(
+          '[SyncInitializerV2]: 🔧 migration fixed permission flags on $fixed device(s)');
+    }
+  }
+
   static String _defaultDeviceName() {
     if (Platform.isAndroid) return 'Android Device';
     if (Platform.isIOS) return 'iPhone';
@@ -215,10 +265,20 @@ class SyncInitializerV2 with WidgetsBindingObserver {
   /// Triggers a debounced sync after a local mutation.
   void triggerDebouncedSync() {
     if (!_initialized) return;
-    // Small delay so multiple rapid writes are batched together
-    Future.delayed(const Duration(seconds: 3), () {
-      if (_initialized) syncManager.syncWithAllPeers();
-    });
+    // Coalesce a burst of writes. Unlike an untracked Future.delayed, this
+    // cannot be silently lost when a pairing/periodic sync is already active.
+    _debouncedSyncTimer?.cancel();
+    _debouncedSyncTimer = Timer(const Duration(seconds: 3), _runDebouncedSync);
+  }
+
+  void _runDebouncedSync() {
+    if (!_initialized) return;
+    if (syncManager.isSyncing) {
+      _debouncedSyncTimer =
+          Timer(const Duration(seconds: 1), _runDebouncedSync);
+      return;
+    }
+    unawaited(syncManager.syncWithAllPeers());
   }
 
   /// Forces a full re-sync with all paired peers by resetting all cursors.

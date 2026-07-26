@@ -215,8 +215,10 @@ class _NewPurchaseScreenState extends State<NewPurchaseScreen> {
                     runSpacing: 8,
                     children: _filteredProducts
                         .map((p) => ElevatedButton(
-                              onPressed: () =>
-                                  _addOrEditItem(product: p),
+                              onPressed: () {
+                                  final existing = _items.where((i) => i.productUuid == p.uuid).firstOrNull;
+                                  _addOrEditItem(product: p, existing: existing);
+                              },
                               child: Text(p.name),
                             ))
                         .toList(),

@@ -47,10 +47,8 @@ class ChangeJournal {
     required Map<String, dynamic> payload,
     String? originDeviceId,
   }) async {
-    final maxLog = await isar.syncChangeLogs
-        .where()
-        .sortByChangeSeqDesc()
-        .findFirst();
+    final maxLog =
+        await isar.syncChangeLogs.where().sortByChangeSeqDesc().findFirst();
     final nextSeq = (maxLog?.changeSeq ?? 0) + 1;
 
     // Optional chain-of-custody: SHA-256 of the previous change for this entity
@@ -59,9 +57,8 @@ class ChangeJournal {
         .entityIdEqualTo(entityId)
         .sortByChangeSeqDesc()
         .findFirst();
-    final previousHash = prevChange != null
-        ? _sha256(jsonEncode(prevChange.toJson()))
-        : null;
+    final previousHash =
+        prevChange != null ? _sha256(jsonEncode(prevChange.toJson())) : null;
 
     final log = SyncChangeLog()
       ..changeId = _uuid.v4()
@@ -77,7 +74,8 @@ class ChangeJournal {
       ..acknowledged = false;
 
     await isar.syncChangeLogs.put(log);
-    debugPrint('[ChangeJournal]: appended seq=$nextSeq type=$entityType op=$operation entity=$entityId');
+    debugPrint(
+        '[ChangeJournal]: appended seq=$nextSeq type=$entityType op=$operation entity=$entityId');
     return nextSeq;
   }
 
@@ -94,15 +92,14 @@ class ChangeJournal {
         .changeIdEqualTo(remote.changeId)
         .findFirst();
     if (existing != null) {
-      debugPrint('[ChangeJournal]: duplicate changeId=${remote.changeId}, skipping');
+      debugPrint(
+          '[ChangeJournal]: duplicate changeId=${remote.changeId}, skipping');
       return false;
     }
 
     // Assign a local sequence number for this device's journal
-    final maxLog = await isar.syncChangeLogs
-        .where()
-        .sortByChangeSeqDesc()
-        .findFirst();
+    final maxLog =
+        await isar.syncChangeLogs.where().sortByChangeSeqDesc().findFirst();
     final nextSeq = (maxLog?.changeSeq ?? 0) + 1;
 
     final stored = SyncChangeLog()
@@ -137,10 +134,49 @@ class ChangeJournal {
         .findAll();
   }
 
+  /// Returns only locally originated changes with [changeSeq] > [sinceSeq].
+  ///
+  /// Useful for diagnostics that need to distinguish local writes from peer
+  /// replay entries. The sync transport itself sends the full journal through
+  /// [getChangesSince] so changes can propagate transitively across peers.
+  Future<List<SyncChangeLog>> getLocalChangesSince(int sinceSeq,
+      {int limit = 200}) {
+    return isar.syncChangeLogs
+        .filter()
+        .originDeviceIdEqualTo(localDeviceId)
+        .and()
+        .changeSeqGreaterThan(sinceSeq)
+        .sortByChangeSeq()
+        .limit(limit)
+        .findAll();
+  }
+
+  /// Returns the number of locally originated changes newer than [sinceSeq].
+  Future<int> countLocalChangesSince(int sinceSeq) {
+    return isar.syncChangeLogs
+        .filter()
+        .originDeviceIdEqualTo(localDeviceId)
+        .and()
+        .changeSeqGreaterThan(sinceSeq)
+        .count();
+  }
+
   /// Returns the highest [changeSeq] currently in the journal.
   Future<int> getCurrentSeq() async {
+    final maxLog =
+        await isar.syncChangeLogs.where().sortByChangeSeqDesc().findFirst();
+    return maxLog?.changeSeq ?? 0;
+  }
+
+  /// Returns the highest change sequence for entries originated locally.
+  ///
+  /// This is the outbound sync watermark used by pending-change UI and the
+  /// push cursor. It is distinct from [getCurrentSeq], which includes remote
+  /// replay entries imported from peers.
+  Future<int> getCurrentLocalSeq() async {
     final maxLog = await isar.syncChangeLogs
-        .where()
+        .filter()
+        .originDeviceIdEqualTo(localDeviceId)
         .sortByChangeSeqDesc()
         .findFirst();
     return maxLog?.changeSeq ?? 0;
@@ -148,17 +184,18 @@ class ChangeJournal {
 
   /// Returns the lowest [changeSeq] still in the journal (after compaction).
   Future<int> getMinSeq() async {
-    final minLog = await isar.syncChangeLogs
-        .where()
-        .sortByChangeSeq()
-        .findFirst();
+    final minLog =
+        await isar.syncChangeLogs.where().sortByChangeSeq().findFirst();
     return minLog?.changeSeq ?? 0;
   }
 
   /// Marks a list of local changes as acknowledged by a peer.
-  Future<void> markAcknowledged(List<int> changeIds) async {
+  ///
+  /// [isarIds] must be the Isar integer primary keys (the [SyncChangeLog.id]
+  /// field), NOT the UUID [SyncChangeLog.changeId] strings.
+  Future<void> markAcknowledged(List<int> isarIds) async {
     await isar.writeTxn(() async {
-      for (final id in changeIds) {
+      for (final id in isarIds) {
         final log = await isar.syncChangeLogs.get(id);
         if (log != null && !log.acknowledged) {
           log.acknowledged = true;
@@ -196,7 +233,8 @@ class ChangeJournal {
       deleted = ids.length;
       if (ids.isNotEmpty) {
         await isar.syncChangeLogs.deleteAll(ids);
-        debugPrint('[ChangeJournal]: pruned $deleted old entries (minPeerCursor=$minPeerCursor)');
+        debugPrint(
+            '[ChangeJournal]: pruned $deleted old entries (minPeerCursor=$minPeerCursor)');
       }
     });
     return deleted;

@@ -10,7 +10,7 @@ class Product {
 
   // Global sync ID (UUID)
   @Index(unique: true)
-  late String uuid;
+  String uuid = const Uuid().v4();
 
   late String name;
 
@@ -26,7 +26,7 @@ class Product {
   @Index()
   int version = 1;
 
-  late String deviceId;
+  String deviceId = 'unknown';
 
   @Index()
   bool isSynced = false;

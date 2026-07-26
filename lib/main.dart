@@ -34,11 +34,12 @@ Future<void> main() async {
 
 Future<void> _bootstrapSync() async {
   try {
-    await Future<void>.delayed(const Duration(seconds: 2));
-
-    // ── Sync v2 (new P2P engine) ─────────────────────────────────────────
-    syncV2 = SyncInitializerV2(port: 8080);
-    await syncV2!.initialize();
+    // Do not publish the singleton until every dependency is initialized.
+    // DBService checks syncV2 when appending a change; exposing a partially
+    // initialized instance can make a user write fail on its late services.
+    final initializer = SyncInitializerV2(port: 8080);
+    await initializer.initialize();
+    syncV2 = initializer;
     debugPrint(
         '[Bootstrap]: Sync v2 engine initialized (deviceId=${syncV2!.deviceId})');
   } catch (e, st) {

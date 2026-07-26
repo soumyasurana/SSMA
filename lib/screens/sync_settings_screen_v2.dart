@@ -28,15 +28,6 @@ const _textPrimary = Color(0xFFE8E8F5);
 const _textSecondary = Color(0xFF7A7A9A);
 const _textMuted = Color(0xFF4A4A6A);
 
-/// Shared helper so the "pending changes for a peer" formula only lives in
-/// one place instead of being duplicated between the parent screen and
-/// [_DeviceCard].
-int _pendingFor(int localSeq, SyncCursor? cursor) {
-  if (cursor == null) return 0;
-  final diff = localSeq - cursor.lastSentSeq;
-  return diff < 0 ? 0 : diff;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Main screen
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,6 +49,7 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
   List<PairingRequest> _pendingRequests = [];
   int _localSeq = 0;
   int _pendingChanges = 0;
+  Map<String, int> _pendingByDeviceId = {};
   Map<String, dynamic> _diagnostics = {};
   bool _syncing = false;
   String? _lastError;
@@ -124,12 +116,16 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
       final cursors = await syncV2!.cursorManager.getAllCursors();
       final pendingRequests =
           await syncV2!.deviceRegistry.getPendingPairingRequests();
-      final seq = await syncV2!.changeJournal.getCurrentSeq();
+      final seq = await syncV2!.changeJournal.getCurrentLocalSeq();
 
-      // Count unsent changes for all paired peers
+      // Count unsent local changes for each peer individually.
+      final pendingByDeviceId = <String, int>{};
       int pending = 0;
       for (final cursor in cursors) {
-        pending += _pendingFor(seq, cursor);
+        final count = await syncV2!.changeJournal
+            .countLocalChangesSince(cursor.lastSentSeq);
+        pendingByDeviceId[cursor.remoteDeviceId] = count;
+        pending += count;
       }
 
       final diag = await syncV2!.discoveryService.getDiagnostics();
@@ -141,6 +137,7 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
           _pendingRequests = pendingRequests;
           _localSeq = seq;
           _pendingChanges = pending;
+          _pendingByDeviceId = pendingByDeviceId;
           _diagnostics = diag;
         });
       }
@@ -179,7 +176,7 @@ class _SyncSettingsScreenV2State extends State<SyncSettingsScreenV2>
                     devices: _devices,
                     cursors: _cursors,
                     pendingRequests: _pendingRequests,
-                    localSeq: _localSeq,
+                    pendingByDeviceId: _pendingByDeviceId,
                     registry: syncV2?.deviceRegistry,
                     onRefresh: _refresh,
                   ),
@@ -615,7 +612,7 @@ class _TabPairedDevices extends StatelessWidget {
   final List<PeerDevice> devices;
   final List<SyncCursor> cursors;
   final List<PairingRequest> pendingRequests;
-  final int localSeq;
+  final Map<String, int> pendingByDeviceId;
   final DeviceRegistry? registry;
   final VoidCallback onRefresh;
 
@@ -623,7 +620,7 @@ class _TabPairedDevices extends StatelessWidget {
     required this.devices,
     required this.cursors,
     required this.pendingRequests,
-    required this.localSeq,
+    required this.pendingByDeviceId,
     required this.registry,
     required this.onRefresh,
   });
@@ -680,7 +677,7 @@ class _TabPairedDevices extends StatelessWidget {
                 cursor: cursors
                     .where((c) => c.remoteDeviceId == d.deviceId)
                     .firstOrNull,
-                localSeq: localSeq,
+                pendingChanges: pendingByDeviceId[d.deviceId] ?? 0,
                 registry: registry,
                 onRefresh: onRefresh,
               )),
@@ -709,11 +706,21 @@ class _InboundPairingRequestCard extends StatelessWidget {
         // it doesn't mark the device as trusted. That's a separate step.
         await registry?.pairDevice(request.initiatorDeviceId);
       }
-      await syncV2?.discoveryService.sendPairingResponse(
+      final responseDelivered =
+          await syncV2?.discoveryService.sendPairingResponse(
         ip: request.initiatorIp,
         port: request.initiatorPort ?? 8080,
         accept: accept,
       );
+      // Once the initiator has received the acceptance both registries trust
+      // each other. Start the first transfer immediately instead of waiting
+      // for the 30-second periodic cycle.
+      // Wait 1 s to let the initiator's onPairingAccepted path (which fires
+      // inside pair/respond) finish first, so we don't race its _isSyncing flag.
+      if (accept && responseDelivered == true) {
+        await Future<void>.delayed(const Duration(milliseconds: 1000));
+        unawaited(syncV2?.syncManager.syncWithDevice(request.initiatorDeviceId));
+      }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -824,14 +831,14 @@ class _OutboundPairingRequestCard extends StatelessWidget {
 class _DeviceCard extends StatefulWidget {
   final PeerDevice device;
   final SyncCursor? cursor;
-  final int localSeq;
+  final int pendingChanges;
   final DeviceRegistry? registry;
   final VoidCallback onRefresh;
 
   const _DeviceCard({
     required this.device,
     required this.cursor,
-    required this.localSeq,
+    required this.pendingChanges,
     required this.registry,
     required this.onRefresh,
   });
@@ -875,7 +882,7 @@ class _DeviceCardState extends State<_DeviceCard> {
   @override
   Widget build(BuildContext context) {
     final device = widget.device;
-    final pendingForPeer = _pendingFor(widget.localSeq, widget.cursor);
+    final pendingForPeer = widget.pendingChanges;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1122,25 +1129,24 @@ class _DeviceCardState extends State<_DeviceCard> {
 
     setState(() => _pairingInFlight = true);
     try {
-      // 1. Actually deliver the request to the peer over the network.
+      // Record before sending. The peer can respond immediately, so doing
+      // this afterwards races the callback and leaves this side unpaired.
+      await widget.registry?.recordPairingRequest(
+        initiatorDeviceId: local.deviceId,
+        initiatorDeviceName: local.deviceName,
+        initiatorPlatform: defaultTargetPlatform.name,
+        initiatorIp: '', // local device's own LAN IP isn't exposed here yet
+        isInitiator: true,
+        targetDeviceId: widget.device.deviceId,
+        targetDeviceName: widget.device.deviceName,
+      );
+
       final delivered = await local.discoveryService.sendPairingRequest(
         widget.device.lastKnownIp,
         widget.device.lastKnownPort,
       );
-
-      // 2. Only record it locally as an outbound request if it was actually
-      //    delivered — otherwise we'd show a "pending" request the peer
-      //    never received.
-      if (delivered) {
-        await widget.registry?.recordPairingRequest(
-          initiatorDeviceId: local.deviceId,
-          initiatorDeviceName: local.deviceName,
-          initiatorPlatform: defaultTargetPlatform.name,
-          initiatorIp: '', // local device's own LAN IP isn't exposed here yet
-          isInitiator: true,
-          targetDeviceId: widget.device.deviceId,
-          targetDeviceName: widget.device.deviceName,
-        );
+      if (!delivered) {
+        await widget.registry?.failOutboundRequest(widget.device.deviceId);
       }
 
       if (!mounted) return;

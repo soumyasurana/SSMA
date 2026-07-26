@@ -233,6 +233,14 @@ class DeviceDiscoveryService {
   // Health checks
   // -----------------------------------------------------------------------
 
+  static String _cleanIp(String ip) {
+    var cleaned = ip.trim();
+    if (cleaned.startsWith('::ffff:')) {
+      cleaned = cleaned.substring(7);
+    }
+    return cleaned;
+  }
+
   Future<void> _runHealthChecks() async {
     final devices = await deviceRegistry.getAllDevices();
     for (final device in devices) {
@@ -243,13 +251,14 @@ class DeviceDiscoveryService {
   }
 
   Future<void> _checkPeerHealth(String deviceId, String ip, int port) async {
-    final url = Uri.parse('http://$ip:$port/sync/v2/health');
+    final cleanedIp = _cleanIp(ip);
+    final url = Uri.parse('http://$cleanedIp:$port/sync/v2/health');
     try {
       final response = await http.get(url).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         await deviceRegistry.refreshConnection(
           deviceId: deviceId,
-          ip: ip,
+          ip: cleanedIp,
           port: port,
           status: 'reachable',
         );
@@ -350,32 +359,33 @@ class DeviceDiscoveryService {
 
   /// Allows the user to manually connect to a device by IP address.
   Future<bool> connectByIp(String ip, {int? customPort}) async {
+    final cleanedIp = _cleanIp(ip);
     final targetPort = customPort ?? port;
     try {
       final response = await http
-          .get(Uri.parse('http://$ip:$targetPort/sync/v2/health'))
+          .get(Uri.parse('http://$cleanedIp:$targetPort/sync/v2/health'))
           .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
-        final remoteDeviceId = body['deviceId'] as String? ?? 'manual_$ip';
+        final remoteDeviceId = body['deviceId'] as String? ?? 'manual_$cleanedIp';
         if (remoteDeviceId == localDeviceId) return false;
 
         await deviceRegistry.upsertDevice(
           deviceId: remoteDeviceId,
-          deviceName: body['deviceName'] as String? ?? 'Device @ $ip',
+          deviceName: body['deviceName'] as String? ?? 'Device @ $cleanedIp',
           platform: body['platform'] as String? ?? 'unknown',
           appVersion: body['appVersion'] as String? ?? '0.0.0',
-          ip: ip,
+          ip: cleanedIp,
           port: targetPort,
         );
         await deviceRegistry.setConnectionStatus(remoteDeviceId, 'reachable');
         debugPrint(
-            '[Discovery]: ✅ Manual connect succeeded: $ip → $remoteDeviceId');
+            '[Discovery]: ✅ Manual connect succeeded: $cleanedIp → $remoteDeviceId');
         return true;
       }
       return false;
     } catch (e) {
-      debugPrint('[Discovery]: ❌ Manual connect to $ip failed: $e');
+      debugPrint('[Discovery]: ❌ Manual connect to $cleanedIp failed: $e');
       return false;
     }
   }
@@ -396,7 +406,8 @@ class DeviceDiscoveryService {
   /// this does NOT mean the peer accepted the pairing, only that the
   /// request was successfully delivered.
   Future<bool> sendPairingRequest(String ip, int port) async {
-    final url = Uri.parse('http://$ip:$port/sync/v2/pair/request');
+    final cleanedIp = _cleanIp(ip);
+    final url = Uri.parse('http://$cleanedIp:$port/sync/v2/pair/request');
     try {
       final response = await http
           .post(
@@ -415,35 +426,28 @@ class DeviceDiscoveryService {
           .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        debugPrint('[Discovery]: ✅ Pairing request delivered to $ip:$port');
+        debugPrint('[Discovery]: ✅ Pairing request delivered to $cleanedIp:$port');
         return true;
       }
       debugPrint(
-          '[Discovery]: ❌ Pairing request to $ip:$port rejected: HTTP ${response.statusCode}');
+          '[Discovery]: ❌ Pairing request to $cleanedIp:$port rejected: HTTP ${response.statusCode}');
       return false;
     } on TimeoutException {
-      debugPrint('[Discovery]: ⏱️ Pairing request to $ip:$port timed out');
+      debugPrint('[Discovery]: ⏱️ Pairing request to $cleanedIp:$port timed out');
       return false;
     } catch (e) {
-      debugPrint('[Discovery]: ❌ Pairing request to $ip:$port errored: $e');
+      debugPrint('[Discovery]: ❌ Pairing request to $cleanedIp:$port errored: $e');
       return false;
     }
   }
 
-  /// Sends the result of a pairing decision (accept/reject) back to the
-  /// device that originally initiated the request.
-  ///
-  /// This is what actually completes pairing on the initiator's side —
-  /// without this call, the initiator has no way of knowing the peer
-  /// responded, and its own [PeerDevice] record for the peer is never
-  /// marked as paired even though the peer's record for the initiator is.
-  /// This is the exact gap causing "B is paired but A isn't."
   Future<bool> sendPairingResponse({
     required String ip,
     required int port,
     required bool accept,
   }) async {
-    final url = Uri.parse('http://$ip:$port/sync/v2/pair/respond');
+    final cleanedIp = _cleanIp(ip);
+    final url = Uri.parse('http://$cleanedIp:$port/sync/v2/pair/respond');
     try {
       final response = await http
           .post(
@@ -461,17 +465,17 @@ class DeviceDiscoveryService {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         debugPrint(
-            '[Discovery]: ✅ Pairing response (accept=$accept) delivered to $ip:$port');
+            '[Discovery]: ✅ Pairing response (accept=$accept) delivered to $cleanedIp:$port');
         return true;
       }
       debugPrint(
-          '[Discovery]: ❌ Pairing response to $ip:$port rejected: HTTP ${response.statusCode}');
+          '[Discovery]: ❌ Pairing response to $cleanedIp:$port rejected: HTTP ${response.statusCode}');
       return false;
     } on TimeoutException {
-      debugPrint('[Discovery]: ⏱️ Pairing response to $ip:$port timed out');
+      debugPrint('[Discovery]: ⏱️ Pairing response to $cleanedIp:$port timed out');
       return false;
     } catch (e) {
-      debugPrint('[Discovery]: ❌ Pairing response to $ip:$port errored: $e');
+      debugPrint('[Discovery]: ❌ Pairing response to $cleanedIp:$port errored: $e');
       return false;
     }
   }
@@ -504,7 +508,7 @@ class DeviceDiscoveryService {
   String? _extractIp(nsd.Service service) {
     if (service.addresses == null) return null;
     for (final addr in service.addresses!) {
-      if (addr.type == InternetAddressType.IPv4) return addr.address;
+      if (addr.type == InternetAddressType.IPv4) return _cleanIp(addr.address);
     }
     return null;
   }

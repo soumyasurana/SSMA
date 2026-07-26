@@ -69,6 +69,8 @@ class SyncManager {
   static const Duration _retryBackoffBase = Duration(seconds: 2);
 
   bool _isSyncing = false;
+  Future<void>? _syncQueueTail;
+  Completer<List<SyncCycleResult>>? _pendingSyncAllCompleter;
 
   SyncManager({
     required this.isar,
@@ -81,10 +83,48 @@ class SyncManager {
   });
 
   // -----------------------------------------------------------------------
-  // Public API
+  // Helper for IP cleaning (removes IPv6-mapped IPv4 prefix ::ffff:)
+  // -----------------------------------------------------------------------
+
+  static String _cleanIp(String ip) {
+    var cleaned = ip.trim();
+    if (cleaned.startsWith('::ffff:')) {
+      cleaned = cleaned.substring(7);
+    }
+    return cleaned;
+  }
+
+  // -----------------------------------------------------------------------
+  // Public API with Async Execution Queuing
   // -----------------------------------------------------------------------
 
   bool get isSyncing => _isSyncing;
+
+  /// Enqueues a sync task onto the FIFO execution queue so concurrent requests
+  /// are processed sequentially rather than being silently dropped.
+  Future<T> _enqueueSyncTask<T>(Future<T> Function() taskAction) async {
+    final previousTail = _syncQueueTail;
+    final taskCompleter = Completer<void>();
+    _syncQueueTail = taskCompleter.future;
+
+    if (previousTail != null) {
+      try {
+        await previousTail;
+      } catch (_) {}
+    }
+
+    _isSyncing = true;
+    statusNotifier.setStatus(SyncStatusV2.syncing);
+
+    try {
+      return await taskAction();
+    } finally {
+      taskCompleter.complete();
+      if (_syncQueueTail == taskCompleter.future) {
+        _isSyncing = false;
+      }
+    }
+  }
 
   /// Triggers a sync with all paired peers.
   ///
@@ -93,14 +133,35 @@ class SyncManager {
   /// device regardless of its auto-sync toggle.
   Future<List<SyncCycleResult>> syncWithAllPeers(
       {bool respectAutoSyncFlag = true}) async {
-    if (_isSyncing) {
-      debugPrint('[SyncManager]: sync already in progress — ignoring request');
-      return [];
+    // Coalesce duplicate queued requests for syncWithAllPeers while a sync task is waiting in line
+    if (_pendingSyncAllCompleter != null && !_pendingSyncAllCompleter!.isCompleted) {
+      debugPrint('[SyncManager]: syncWithAllPeers request coalesced into existing queued task');
+      return _pendingSyncAllCompleter!.future;
     }
 
-    _isSyncing = true;
-    statusNotifier.setStatus(SyncStatusV2.syncing);
+    final completer = Completer<List<SyncCycleResult>>();
+    _pendingSyncAllCompleter = completer;
 
+    _enqueueSyncTask(() async {
+      try {
+        final res = await _doSyncWithAllPeers(respectAutoSyncFlag: respectAutoSyncFlag);
+        if (!completer.isCompleted) completer.complete(res);
+        return res;
+      } catch (e, st) {
+        if (!completer.isCompleted) completer.completeError(e, st);
+        rethrow;
+      } finally {
+        if (_pendingSyncAllCompleter == completer) {
+          _pendingSyncAllCompleter = null;
+        }
+      }
+    });
+
+    return completer.future;
+  }
+
+  Future<List<SyncCycleResult>> _doSyncWithAllPeers(
+      {bool respectAutoSyncFlag = true}) async {
     final results = <SyncCycleResult>[];
 
     try {
@@ -116,13 +177,24 @@ class SyncManager {
       }
 
       final anySuccess = results.any((r) => r.success);
-      statusNotifier
-          .setStatus(anySuccess ? SyncStatusV2.idle : SyncStatusV2.error);
+      final anyFailure = results.any((r) => !r.success);
+      if (results.isEmpty || (anySuccess && !anyFailure)) {
+        statusNotifier.setStatus(SyncStatusV2.idle);
+      } else if (anySuccess && anyFailure) {
+        // Some peers synced, some failed — report partial error so the UI
+        // doesn't silently hide the failing peers.
+        final failedPeers = results
+            .where((r) => !r.success)
+            .map((r) => r.peerDeviceId)
+            .join(', ');
+        statusNotifier.setStatus(SyncStatusV2.error,
+            error: 'Partial sync failure — failed peers: $failedPeers');
+      } else {
+        statusNotifier.setStatus(SyncStatusV2.error);
+      }
     } catch (e, st) {
       debugPrint('[SyncManager]: ❌ syncWithAllPeers error: $e\n$st');
       statusNotifier.setStatus(SyncStatusV2.error);
-    } finally {
-      _isSyncing = false;
     }
 
     return results;
@@ -130,18 +202,41 @@ class SyncManager {
 
   /// Triggers a sync with a specific peer by device ID.
   Future<SyncCycleResult> syncWithDevice(String deviceId) async {
-    final peer = await deviceRegistry.getDevice(deviceId);
-    if (peer == null) {
+    return _enqueueSyncTask(() => _doSyncWithDevice(deviceId));
+  }
+
+  Future<SyncCycleResult> _doSyncWithDevice(String deviceId) async {
+    try {
+      final peer = await deviceRegistry.getDevice(deviceId);
+      if (peer == null) {
+        const message = 'Device not found in registry';
+        statusNotifier.setStatus(SyncStatusV2.error, error: message);
+        return SyncCycleResult(
+          peerDeviceId: deviceId,
+          success: false,
+          changesSent: 0,
+          changesReceived: 0,
+          duration: Duration.zero,
+          errorMessage: message,
+        );
+      }
+      final result = await _syncWithPeer(peer);
+      statusNotifier.setStatus(
+          result.success ? SyncStatusV2.idle : SyncStatusV2.error,
+          error: result.errorMessage);
+      return result;
+    } catch (e, st) {
+      debugPrint('[SyncManager]: ❌ manual sync error: $e\n$st');
+      statusNotifier.setStatus(SyncStatusV2.error, error: e.toString());
       return SyncCycleResult(
         peerDeviceId: deviceId,
         success: false,
         changesSent: 0,
         changesReceived: 0,
         duration: Duration.zero,
-        errorMessage: 'Device not found in registry',
+        errorMessage: e.toString(),
       );
     }
-    return _syncWithPeer(peer);
   }
 
   // -----------------------------------------------------------------------
@@ -150,54 +245,62 @@ class SyncManager {
 
   Future<SyncCycleResult> _syncWithPeer(PeerDevice peer) async {
     final startTime = DateTime.now();
+    final cleanedIp = _cleanIp(peer.lastKnownIp);
     int totalSent = 0;
     int totalReceived = 0;
     int totalErrors = 0;
 
     debugPrint(
-        '[SyncManager]: → starting sync with ${peer.deviceId} (${peer.lastKnownIp}:${peer.lastKnownPort})');
+        '[SyncManager]: → starting sync with ${peer.deviceId} ($cleanedIp:${peer.lastKnownPort})');
+
+    // Trust check
+    if (!peer.isPaired) {
+      debugPrint(
+          '[SyncManager]: ⛔ ${peer.deviceId} is not paired — skipping');
+      return SyncCycleResult(
+        peerDeviceId: peer.deviceId,
+        success: false,
+        changesSent: 0,
+        changesReceived: 0,
+        duration: DateTime.now().difference(startTime),
+        errorMessage: 'Device is not paired',
+      );
+    }
+
+    // Permission check
+    if (!peer.receiveEnabled && !peer.sendEnabled) {
+      debugPrint(
+          '[SyncManager]: ⛔ ${peer.deviceId} has both send and receive disabled — skipping');
+      return SyncCycleResult(
+        peerDeviceId: peer.deviceId,
+        success: false,
+        changesSent: 0,
+        changesReceived: 0,
+        duration: DateTime.now().difference(startTime),
+        errorMessage: 'All sync permissions disabled for this device',
+      );
+    }
+
+    await deviceRegistry.setConnectionStatus(peer.deviceId, 'syncing');
+
+    // Phase 1: Handshake — Fast failure if unreachable/offline
+    final handshakeOk = await _handshake(peer);
+    if (!handshakeOk) {
+      debugPrint('[SyncManager]: ❌ handshake failed with ${peer.deviceId}');
+      await deviceRegistry.setConnectionStatus(peer.deviceId, 'unreachable');
+      return SyncCycleResult(
+        peerDeviceId: peer.deviceId,
+        success: false,
+        changesSent: 0,
+        changesReceived: 0,
+        duration: DateTime.now().difference(startTime),
+        errorMessage: 'Handshake failed — unreachable or incompatible peer',
+      );
+    }
+    debugPrint('[SyncManager]: ✅ handshake result with ${peer.deviceId}');
 
     for (int attempt = 1; attempt <= _maxRetries; attempt++) {
       try {
-        // Trust check
-        if (!peer.isPaired) {
-          debugPrint(
-              '[SyncManager]: ⛔ ${peer.deviceId} is not paired — skipping');
-          return SyncCycleResult(
-            peerDeviceId: peer.deviceId,
-            success: false,
-            changesSent: 0,
-            changesReceived: 0,
-            duration: DateTime.now().difference(startTime),
-            errorMessage: 'Device is not paired',
-          );
-        }
-
-        // Permission check
-        if (!peer.receiveEnabled && !peer.sendEnabled) {
-          debugPrint(
-              '[SyncManager]: ⛔ ${peer.deviceId} has both send and receive disabled — skipping');
-          return SyncCycleResult(
-            peerDeviceId: peer.deviceId,
-            success: false,
-            changesSent: 0,
-            changesReceived: 0,
-            duration: DateTime.now().difference(startTime),
-            errorMessage: 'All sync permissions disabled for this device',
-          );
-        }
-
-        await deviceRegistry.setConnectionStatus(peer.deviceId, 'syncing');
-
-        // Phase 1: Handshake
-        final handshakeOk = await _handshake(peer);
-        if (!handshakeOk) {
-          debugPrint('[SyncManager]: ❌ handshake result with ${peer.deviceId}');
-          throw Exception(
-              'Handshake failed — incompatible peer or unreachable');
-        }
-        debugPrint('[SyncManager]: ✅ handshake result with ${peer.deviceId}');
-
         // Phase 2: Pull (receive changes from peer)
         if (peer.receiveEnabled) {
           final res = await _pullPhase(peer);
@@ -253,7 +356,6 @@ class SyncManager {
       }
     }
 
-    // Should never reach here
     return SyncCycleResult(
       peerDeviceId: peer.deviceId,
       success: false,
@@ -270,8 +372,9 @@ class SyncManager {
   // -----------------------------------------------------------------------
 
   Future<bool> _handshake(PeerDevice peer) async {
+    final cleanedIp = _cleanIp(peer.lastKnownIp);
     final url = Uri.parse(
-        'http://${peer.lastKnownIp}:${peer.lastKnownPort}/sync/v2/handshake');
+        'http://$cleanedIp:${peer.lastKnownPort}/sync/v2/handshake');
     try {
       final response = await http
           .post(
@@ -321,8 +424,9 @@ class SyncManager {
     debugPrint('[SyncManager]: ← PULL from ${peer.deviceId} since seq=$cursor');
 
     while (true) {
+      final cleanedIp = _cleanIp(peer.lastKnownIp);
       final url = Uri.parse(
-        'http://${peer.lastKnownIp}:${peer.lastKnownPort}'
+        'http://$cleanedIp:${peer.lastKnownPort}'
         '/sync/v2/pull?since=$cursor&limit=$_batchSize',
       );
 
@@ -338,7 +442,6 @@ class SyncManager {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       final List<dynamic> rawChanges = body['changes'] ?? [];
       final bool hasMore = body['hasMore'] ?? false;
-      final int nextCursor = body['nextCursor'] ?? cursor;
       final int peerMinSeq = body['minSeq'] ?? 0;
 
       // Detect compaction gap: peer has pruned history our cursor was in
@@ -356,7 +459,8 @@ class SyncManager {
       }
 
       final changes = rawChanges
-          .map((e) => SyncChangeLog.fromJson(e as Map<String, dynamic>))
+          .map((e) =>
+              SyncChangeLog.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
 
       if (changes.isNotEmpty) {
@@ -364,12 +468,10 @@ class SyncManager {
         totalReceived += result.applied;
         totalErrors += result.errors;
 
-        final actualNewSeq = result.errors > 0 && result.lastProcessedSeq != -1
-            ? result.lastProcessedSeq
-            : nextCursor;
-
-        // Advance to the last attempted seq so one bad row cannot pin the
-        // receive cursor forever. Each change remains idempotent.
+        // Only a contiguous successfully handled prefix may be acknowledged.
+        // Advancing to nextCursor after an error silently loses the failed
+        // change and breaks resumable delivery.
+        final actualNewSeq = result.lastProcessedSeq;
         if (actualNewSeq > cursor) {
           await cursorManager.advanceReceiveCursor(
             remoteDeviceId: peer.deviceId,
@@ -386,7 +488,8 @@ class SyncManager {
         if (result.errors > 0) {
           debugPrint(
               '[SyncManager]: ← PULL page had ${result.errors} error(s); '
-              'continuing with the next page if available');
+              'leaving the failed entry for retry');
+          break;
         }
       }
 
@@ -402,7 +505,13 @@ class SyncManager {
   // Push phase
   // -----------------------------------------------------------------------
 
-  /// Pushes all our local changes that the peer hasn't seen yet.
+  /// Pushes all journal changes that the peer hasn't seen yet.
+  ///
+  /// The journal intentionally includes changes replayed from other peers.
+  /// Sending the full journal lets the P2P network converge even when every
+  /// device is not directly connected to every other device. Duplicate
+  /// changeIds are ignored by receivers, so echoing a peer's own change back
+  /// to it is safe.
   /// Returns the total number of changes sent.
   Future<_PhaseResult> _pushPhase(PeerDevice peer) async {
     final cursor = await cursorManager.getCursor(peer.deviceId);
@@ -416,8 +525,9 @@ class SyncManager {
       final batch = await journal.getChangesSince(fromSeq, limit: _batchSize);
       if (batch.isEmpty) break;
 
+      final cleanedIp = _cleanIp(peer.lastKnownIp);
       final url = Uri.parse(
-          'http://${peer.lastKnownIp}:${peer.lastKnownPort}/sync/v2/push');
+          'http://$cleanedIp:${peer.lastKnownPort}/sync/v2/push');
 
       final response = await http
           .post(
@@ -511,7 +621,10 @@ class SyncStatusNotifierV2 extends ChangeNotifier {
     if (error != null) _lastError = error;
     if (status == SyncStatusV2.idle) {
       _lastSyncTime = DateTime.now();
-      _lastError = null;
+      // Only clear the error when the sync genuinely completed cleanly.
+      // If an error string was passed alongside idle (shouldn't happen, but
+      // defensive), preserve it rather than wiping it.
+      if (error == null) _lastError = null;
     }
     notifyListeners();
   }
