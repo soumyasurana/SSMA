@@ -190,8 +190,17 @@ class ChangeProcessor {
   Future<_ApplyResult> _processSingle(SyncChangeLog change) async {
     _ApplyResult result = _ApplyResult.applied;
 
+    final handler = EntityRegistry.get(change.entityType);
+    if (handler == null) {
+      return _ApplyResult.unknownType;
+    }
+
+    final payload = jsonDecode(change.payload) as Map<String, dynamic>;
+
     await isar.writeTxn(() async {
-      // Idempotency check: skip if we already stored this changeId
+      // Keep duplicate detection and local sequence allocation in the same
+      // transaction as the entity/journal writes. Otherwise concurrent pushes
+      // can assign the same local changeSeq and break cursor pagination.
       final existing = await isar.syncChangeLogs
           .filter()
           .changeIdEqualTo(change.changeId)
@@ -201,15 +210,10 @@ class ChangeProcessor {
         return;
       }
 
-      // Look up the handler
-      final handler = EntityRegistry.get(change.entityType);
-      if (handler == null) {
-        result = _ApplyResult.unknownType;
-        return;
-      }
+      final storedJournalEntry = journal.buildRemoteEntry(change,
+          localSeq: await journal.getNextSeq());
 
       // Apply the entity change via the handler
-      final payload = jsonDecode(change.payload) as Map<String, dynamic>;
       final applyOutcome = await handler.applyChange(
           payload, change.operation, conflictResolver, isar);
       if (applyOutcome == false) {
@@ -217,7 +221,7 @@ class ChangeProcessor {
       }
 
       // Record the remote change in the local journal (for future peer pulls)
-      await journal.appendRemote(change);
+      await journal.putRemoteEntry(storedJournalEntry);
     });
 
     return result;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ssma/models/sale.dart';
 import 'package:ssma/services/db_service.dart';
+import 'package:ssma/sync/v2/sync_initializer_v2.dart' show syncV2;
 
 import 'low_stock_screen.dart';
 import 'supplier_screen.dart';
@@ -45,6 +46,19 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     loadStats();
+    syncV2?.statusNotifier.addListener(_onSyncChanged);
+  }
+
+  void _onSyncChanged() {
+    if (mounted) {
+      loadStats();
+    }
+  }
+
+  @override
+  void dispose() {
+    syncV2?.statusNotifier.removeListener(_onSyncChanged);
+    super.dispose();
   }
 
   Future<void> loadStats() async {

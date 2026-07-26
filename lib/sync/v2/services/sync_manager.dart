@@ -134,8 +134,10 @@ class SyncManager {
   Future<List<SyncCycleResult>> syncWithAllPeers(
       {bool respectAutoSyncFlag = true}) async {
     // Coalesce duplicate queued requests for syncWithAllPeers while a sync task is waiting in line
-    if (_pendingSyncAllCompleter != null && !_pendingSyncAllCompleter!.isCompleted) {
-      debugPrint('[SyncManager]: syncWithAllPeers request coalesced into existing queued task');
+    if (_pendingSyncAllCompleter != null &&
+        !_pendingSyncAllCompleter!.isCompleted) {
+      debugPrint(
+          '[SyncManager]: syncWithAllPeers request coalesced into existing queued task');
       return _pendingSyncAllCompleter!.future;
     }
 
@@ -144,7 +146,8 @@ class SyncManager {
 
     _enqueueSyncTask(() async {
       try {
-        final res = await _doSyncWithAllPeers(respectAutoSyncFlag: respectAutoSyncFlag);
+        final res =
+            await _doSyncWithAllPeers(respectAutoSyncFlag: respectAutoSyncFlag);
         if (!completer.isCompleted) completer.complete(res);
         return res;
       } catch (e, st) {
@@ -255,8 +258,7 @@ class SyncManager {
 
     // Trust check
     if (!peer.isPaired) {
-      debugPrint(
-          '[SyncManager]: ⛔ ${peer.deviceId} is not paired — skipping');
+      debugPrint('[SyncManager]: ⛔ ${peer.deviceId} is not paired — skipping');
       return SyncCycleResult(
         peerDeviceId: peer.deviceId,
         success: false,
@@ -373,8 +375,8 @@ class SyncManager {
 
   Future<bool> _handshake(PeerDevice peer) async {
     final cleanedIp = _cleanIp(peer.lastKnownIp);
-    final url = Uri.parse(
-        'http://$cleanedIp:${peer.lastKnownPort}/sync/v2/handshake');
+    final url =
+        Uri.parse('http://$cleanedIp:${peer.lastKnownPort}/sync/v2/handshake');
     try {
       final response = await http
           .post(
@@ -444,8 +446,11 @@ class SyncManager {
       final bool hasMore = body['hasMore'] ?? false;
       final int peerMinSeq = body['minSeq'] ?? 0;
 
-      // Detect compaction gap: peer has pruned history our cursor was in
-      if (peerMinSeq > 0 && cursor < peerMinSeq) {
+      // Detect compaction gap: peer has pruned the next change we would ask
+      // for. A fresh cursor at 0 with peerMinSeq=1 is normal and must pull
+      // seq 1, not loop forever resetting to 0.
+      final nextRequestedSeq = cursor + 1;
+      if (peerMinSeq > 0 && nextRequestedSeq < peerMinSeq) {
         debugPrint(
             '[SyncManager]: ⚠ peer ${peer.deviceId} minSeq=$peerMinSeq > our cursor=$cursor '
             '(peer history was compacted). Resetting to peerMinSeq-1.');
@@ -526,8 +531,8 @@ class SyncManager {
       if (batch.isEmpty) break;
 
       final cleanedIp = _cleanIp(peer.lastKnownIp);
-      final url = Uri.parse(
-          'http://$cleanedIp:${peer.lastKnownPort}/sync/v2/push');
+      final url =
+          Uri.parse('http://$cleanedIp:${peer.lastKnownPort}/sync/v2/push');
 
       final response = await http
           .post(

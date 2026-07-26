@@ -4,6 +4,7 @@ import 'package:ssma/screens/supplier_detail_screen.dart';
 import 'package:ssma/screens/new_purchase_screen.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/device_service.dart';
+import 'package:ssma/sync/v2/sync_initializer_v2.dart' show syncV2;
 
 class SupplierScreen extends StatefulWidget {
   const SupplierScreen({super.key});
@@ -29,6 +30,23 @@ class _SupplierScreenState extends State<SupplierScreen> {
     super.initState();
     _searchController.addListener(_filterSuppliers);
     _loadSuppliers();
+    syncV2?.statusNotifier.addListener(_onSyncChanged);
+  }
+
+  void _onSyncChanged() {
+    if (mounted) {
+      _loadSuppliers();
+    }
+  }
+
+  @override
+  void dispose() {
+    syncV2?.statusNotifier.removeListener(_onSyncChanged);
+    _searchController.dispose();
+    _nameController.dispose();
+    _contactController.dispose();
+    _addressController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadSuppliers() async {
@@ -214,15 +232,6 @@ class _SupplierScreenState extends State<SupplierScreen> {
         ],
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _nameController.dispose();
-    _contactController.dispose();
-    _addressController.dispose();
-    super.dispose();
   }
 
   @override

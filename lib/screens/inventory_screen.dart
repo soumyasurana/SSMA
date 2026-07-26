@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ssma/models/product.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/device_service.dart'; // <-- for deviceId
+import 'package:ssma/sync/v2/sync_initializer_v2.dart' show syncV2;
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart';
@@ -28,13 +29,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
   void initState() {
     super.initState();
     _loadProducts();
+    syncV2?.statusNotifier.addListener(_onSyncChanged);
     _searchController.addListener(() {
       _filterProducts(_searchController.text);
     });
   }
 
+  void _onSyncChanged() {
+    if (mounted) {
+      _loadProducts();
+    }
+  }
+
   @override
   void dispose() {
+    syncV2?.statusNotifier.removeListener(_onSyncChanged);
     _searchController.dispose();
     _nameController.dispose();
     _purchasePriceController.dispose();
@@ -243,11 +252,9 @@ Future<void> _processExcel(Uint8List bytes) async {
                     ..name = name
                     ..purchasePrice = purchasePrice
                     ..salePrice = salePrice
-                    ..quantity = quantity
-                    ..updatedAt = DateTime.now()
-                    ..isSynced = false
-                    ..version += 1;
-
+                    ..quantity = quantity;
+                  // NOTE: Do NOT set updatedAt/isSynced/version here.
+                  // DBService.updateProduct handles all sync bookkeeping.
                   await DBService.updateProduct(editingProduct);
                 } else {
                   final deviceId = await DeviceService.getDeviceId();
@@ -340,11 +347,23 @@ Future<void> _processExcel(Uint8List bytes) async {
             ),
           ),
           Expanded(
-            child: _filteredProducts.isEmpty
-                ? const Center(child: Text('No matching products.'))
-                : ListView.separated(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _filteredProducts.length,
+            child: RefreshIndicator(
+              onRefresh: () async {
+                await _loadProducts();
+                await syncV2?.syncManager.syncWithAllPeers();
+              },
+              child: _filteredProducts.isEmpty
+                  ? SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.6,
+                        child: const Center(child: Text('No matching products.')),
+                      ),
+                    )
+                  : ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _filteredProducts.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (context, index) {
                       final p = _filteredProducts[index];
@@ -383,6 +402,7 @@ Future<void> _processExcel(Uint8List bytes) async {
                       );
                     },
                   ),
+            ),
           ),
         ],
       ),

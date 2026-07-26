@@ -9,10 +9,12 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 
 import '../models/sync_change_log.dart';
+import '../sync_initializer_v2.dart' show syncV2;
 import 'change_journal.dart';
 import 'change_processor.dart';
 import 'cursor_manager.dart';
 import 'device_registry.dart';
+import 'sync_manager.dart' show SyncStatusV2;
 
 /// The local HTTP server that makes this device a sync endpoint.
 ///
@@ -247,6 +249,10 @@ class LocalSyncServer {
           .toList();
 
       final result = await changeProcessor.processBatch(changes);
+
+      if (result.applied > 0) {
+        syncV2?.statusNotifier.setStatus(SyncStatusV2.idle);
+      }
 
       return _json({
         'accepted': result.applied,

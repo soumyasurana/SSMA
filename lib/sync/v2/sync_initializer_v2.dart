@@ -64,6 +64,8 @@ class SyncInitializerV2 with WidgetsBindingObserver {
   Future<void> initialize() async {
     if (_initialized) return;
 
+    syncV2 = this;
+
     // 1. Load or create persistent device identity
     _deviceId = await _loadOrCreateDeviceId();
     _deviceName = await _loadOrCreateDeviceName();
@@ -83,6 +85,8 @@ class SyncInitializerV2 with WidgetsBindingObserver {
       conflictResolver: conflictResolver,
     );
     deviceRegistry = DeviceRegistry(isar: isar);
+
+    await DBService.flushPendingJournalEntries();
 
     // 2b. Backfill the v2 journal for legacy rows that predate sync v2.
     await DBService.backfillSyncV2Journal(changeJournal);
@@ -164,6 +168,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     await discoveryService.stop();
     await syncServer.stop();
     _initialized = false;
+    syncV2 = null;
     debugPrint('[SyncInitializerV2]: shutdown complete');
   }
 

@@ -4,6 +4,7 @@ import 'package:ssma/models/sale.dart';
 import 'package:ssma/screens/customer_detail_screen.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/device_service.dart';
+import 'package:ssma/sync/v2/sync_initializer_v2.dart' show syncV2;
 
 class CustomerScreen extends StatefulWidget {
   const CustomerScreen({super.key});
@@ -24,13 +25,21 @@ class _CustomerScreenState extends State<CustomerScreen> {
   void initState() {
     super.initState();
     _loadCustomers();
+    syncV2?.statusNotifier.addListener(_onSyncChanged);
     _searchController.addListener(() {
       _filterCustomers(_searchController.text);
     });
   }
 
+  void _onSyncChanged() {
+    if (mounted) {
+      _loadCustomers();
+    }
+  }
+
   @override
   void dispose() {
+    syncV2?.statusNotifier.removeListener(_onSyncChanged);
     _searchController.dispose();
     _nameController.dispose();
     _phoneController.dispose();

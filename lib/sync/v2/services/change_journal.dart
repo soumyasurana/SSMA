@@ -47,33 +47,41 @@ class ChangeJournal {
     required Map<String, dynamic> payload,
     String? originDeviceId,
   }) async {
-    final maxLog =
-        await isar.syncChangeLogs.where().sortByChangeSeqDesc().findFirst();
-    final nextSeq = (maxLog?.changeSeq ?? 0) + 1;
+    // All reads and the write are inside one writeTxn so this method is
+    // self-contained and can be called from any context (including outside an
+    // existing transaction). Isar 3.x forbids reads inside a write transaction
+    // that was started externally, so callers must NOT wrap this in their own
+    // writeTxn.
+    int nextSeq = 0;
+    await isar.writeTxn(() async {
+      final maxLog =
+          await isar.syncChangeLogs.where().sortByChangeSeqDesc().findFirst();
+      nextSeq = (maxLog?.changeSeq ?? 0) + 1;
 
-    // Optional chain-of-custody: SHA-256 of the previous change for this entity
-    final prevChange = await isar.syncChangeLogs
-        .filter()
-        .entityIdEqualTo(entityId)
-        .sortByChangeSeqDesc()
-        .findFirst();
-    final previousHash =
-        prevChange != null ? _sha256(jsonEncode(prevChange.toJson())) : null;
+      // Optional chain-of-custody: SHA-256 of the previous change for this entity
+      final prevChange = await isar.syncChangeLogs
+          .filter()
+          .entityIdEqualTo(entityId)
+          .sortByChangeSeqDesc()
+          .findFirst();
+      final previousHash =
+          prevChange != null ? _sha256(jsonEncode(prevChange.toJson())) : null;
 
-    final log = SyncChangeLog()
-      ..changeId = _uuid.v4()
-      ..changeSeq = nextSeq
-      ..entityType = entityType
-      ..entityId = entityId
-      ..operation = operation
-      ..entityVersion = entityVersion
-      ..originDeviceId = originDeviceId ?? localDeviceId
-      ..timestampMs = DateTime.now().millisecondsSinceEpoch
-      ..payload = jsonEncode(payload)
-      ..previousChangeHash = previousHash
-      ..acknowledged = false;
+      final log = SyncChangeLog()
+        ..changeId = _uuid.v4()
+        ..changeSeq = nextSeq
+        ..entityType = entityType
+        ..entityId = entityId
+        ..operation = operation
+        ..entityVersion = entityVersion
+        ..originDeviceId = originDeviceId ?? localDeviceId
+        ..timestampMs = DateTime.now().millisecondsSinceEpoch
+        ..payload = jsonEncode(payload)
+        ..previousChangeHash = previousHash
+        ..acknowledged = false;
 
-    await isar.syncChangeLogs.put(log);
+      await isar.syncChangeLogs.put(log);
+    });
     debugPrint(
         '[ChangeJournal]: appended seq=$nextSeq type=$entityType op=$operation entity=$entityId');
     return nextSeq;
@@ -81,12 +89,13 @@ class ChangeJournal {
 
   /// Appends a remote change received from a peer.
   ///
-  /// MUST be called from within an active [isar.writeTxn] block.
-  /// Uses the remote [changeId] to enforce idempotency.
+  /// This self-contained helper is safe to call outside an existing
+  /// transaction. [ChangeProcessor] uses [buildRemoteEntry] + [putRemoteEntry]
+  /// instead so it can apply the entity row and journal row in one transaction
+  /// without doing extra journal reads inside that transaction.
   ///
   /// Returns false if this change was already recorded (duplicate), true if applied.
   Future<bool> appendRemote(SyncChangeLog remote) async {
-    // Idempotency check: ignore if we already have this changeId
     final existing = await isar.syncChangeLogs
         .filter()
         .changeIdEqualTo(remote.changeId)
@@ -97,14 +106,30 @@ class ChangeJournal {
       return false;
     }
 
-    // Assign a local sequence number for this device's journal
+    final nextSeq = await getNextSeq();
+    final stored = buildRemoteEntry(remote, localSeq: nextSeq);
+
+    await isar.writeTxn(() => isar.syncChangeLogs.put(stored));
+    return true;
+  }
+
+  /// Returns the next local journal sequence number.
+  Future<int> getNextSeq() async {
     final maxLog =
         await isar.syncChangeLogs.where().sortByChangeSeqDesc().findFirst();
-    final nextSeq = (maxLog?.changeSeq ?? 0) + 1;
+    return (maxLog?.changeSeq ?? 0) + 1;
+  }
 
-    final stored = SyncChangeLog()
+  /// Builds the local journal representation of a remote change.
+  ///
+  /// The remote [changeId] is preserved for idempotency, while [changeSeq] is
+  /// assigned from this device's journal because sync cursors are per-peer
+  /// positions in the serving device's journal.
+  SyncChangeLog buildRemoteEntry(SyncChangeLog remote,
+      {required int localSeq}) {
+    return SyncChangeLog()
       ..changeId = remote.changeId
-      ..changeSeq = nextSeq
+      ..changeSeq = localSeq
       ..entityType = remote.entityType
       ..entityId = remote.entityId
       ..operation = remote.operation
@@ -113,10 +138,15 @@ class ChangeJournal {
       ..timestampMs = remote.timestampMs
       ..payload = remote.payload
       ..previousChangeHash = remote.previousChangeHash
-      ..acknowledged = true; // received from peer = already acknowledged
+      ..acknowledged = true;
+  }
 
-    await isar.syncChangeLogs.put(stored);
-    return true;
+  /// Stores a prepared remote journal entry.
+  ///
+  /// Call this from inside the same write transaction that applies the entity
+  /// change so a received change never lands half-applied.
+  Future<void> putRemoteEntry(SyncChangeLog stored) {
+    return isar.syncChangeLogs.put(stored);
   }
 
   // -----------------------------------------------------------------------

@@ -4,6 +4,7 @@ import 'package:ssma/models/sale.dart';
 import 'package:ssma/screens/new_sale_screen.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/pdf_service.dart';
+import 'package:ssma/sync/v2/sync_initializer_v2.dart' show syncV2;
 
 class SalesHistoryScreen extends StatefulWidget {
   const SalesHistoryScreen({super.key});
@@ -22,13 +23,21 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   void initState() {
     super.initState();
     _loadSales();
+    syncV2?.statusNotifier.addListener(_onSyncChanged);
     _searchController.addListener(() {
       _filterSales(_searchController.text);
     });
   }
 
+  void _onSyncChanged() {
+    if (mounted) {
+      _loadSales();
+    }
+  }
+
   @override
   void dispose() {
+    syncV2?.statusNotifier.removeListener(_onSyncChanged);
     _searchController.dispose();
     super.dispose();
   }
