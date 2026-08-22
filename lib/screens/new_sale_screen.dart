@@ -9,17 +9,19 @@ import 'package:ssma/services/pdf_service.dart';
 import 'package:ssma/utils/sale_metadata.dart';
 import 'package:ssma/utils/search_utils.dart';
 
-enum BillingMode { creditDebit, ledger }
+
 
 enum PriceChangeMode { temporary, permanent }
 
 class _PendingPriceUpdate {
   final double purchasePrice;
   final double salePrice;
+  final String? name;
 
   const _PendingPriceUpdate({
     required this.purchasePrice,
     required this.salePrice,
+    this.name,
   });
 }
 
@@ -85,7 +87,6 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   DateTime _selectedDate = DateTime.now();
   String _deviceId = '';
   bool _isSaving = false;
-  BillingMode _billingMode = BillingMode.creditDebit;
   final Map<String, _PendingPriceUpdate> _productsToUpdatePrice = {};
   final List<Map<String, TextEditingController>> _paymentRows = [];
 
@@ -110,9 +111,6 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       _amountReceivedController.text = sale.amountReceived.toString();
       _selectedDate = sale.date;
       _selectedSaleType = sale.saleType;
-      _billingMode = metadata.billingMode == 'ledger'
-          ? BillingMode.ledger
-          : BillingMode.creditDebit;
       for (final payment in metadata.payments) {
         _paymentRows.add({
           'method': TextEditingController(text: payment.method),
@@ -182,6 +180,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   }
 
   void _showQuantityDialog(Product product) {
+    final nameController = TextEditingController(text: product.name);
     final qtyController = TextEditingController(text: '1');
     final purchasePriceController =
         TextEditingController(text: product.purchasePrice.toStringAsFixed(2));
@@ -207,50 +206,60 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (innerContext, setDialogState) => AlertDialog(
           title: Text('Add ${product.name}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: qtyController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Quantity'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: purchasePriceController,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Purchase Price'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: priceController,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Selling Price'),
-              ),
-              const SizedBox(height: 8),
-              SegmentedButton<PriceChangeMode>(
-                segments: const [
-                  ButtonSegment(
-                    value: PriceChangeMode.temporary,
-                    label: Text('This bill only'),
-                    icon: Icon(Icons.receipt_long),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Item Name (on bill)',
+                    helperText: 'Edit to show a different name on this bill',
                   ),
-                  ButtonSegment(
-                    value: PriceChangeMode.permanent,
-                    label: Text('Save to inventory'),
-                    icon: Icon(Icons.inventory),
-                  ),
-                ],
-                selected: {priceMode},
-                onSelectionChanged: (selection) {
-                  setDialogState(() {
-                    priceMode = selection.first;
-                  });
-                },
-              ),
-            ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: qtyController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Quantity'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: purchasePriceController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Purchase Price'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: priceController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Selling Price'),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<PriceChangeMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: PriceChangeMode.temporary,
+                      label: Text('This bill only'),
+                      icon: Icon(Icons.receipt_long),
+                    ),
+                    ButtonSegment(
+                      value: PriceChangeMode.permanent,
+                      label: Text('Save to inventory'),
+                      icon: Icon(Icons.inventory),
+                    ),
+                  ],
+                  selected: {priceMode},
+                  onSelectionChanged: (selection) {
+                    setDialogState(() {
+                      priceMode = selection.first;
+                    });
+                  },
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -262,20 +271,24 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                 final purchasePrice =
                     double.tryParse(purchasePriceController.text);
                 final price = double.tryParse(priceController.text);
+                final billName = nameController.text.trim();
 
                 if (qty != null &&
                     qty > 0 &&
                     purchasePrice != null &&
                     purchasePrice >= 0 &&
                     price != null &&
-                    price >= 0) {
+                    price >= 0 &&
+                    billName.isNotEmpty) {
                   if (priceMode == PriceChangeMode.permanent) {
                     final confirmed = await showDialog<bool>(
                       context: innerContext,
                       builder: (confirmContext) => AlertDialog(
-                        title: const Text('Save prices to inventory?'),
+                        title: const Text('Save to inventory?'),
                         content: Text(
-                          'Future bills will use purchase ₹${purchasePrice.toStringAsFixed(2)} and selling ₹${price.toStringAsFixed(2)} for ${product.name}.',
+                          'Future bills will use name "${billName}", '
+                          'purchase ₹${purchasePrice.toStringAsFixed(2)} and '
+                          'selling ₹${price.toStringAsFixed(2)} for ${product.name}.',
                         ),
                         actions: [
                           TextButton(
@@ -295,6 +308,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                     _productsToUpdatePrice[product.uuid] = _PendingPriceUpdate(
                       purchasePrice: purchasePrice,
                       salePrice: price,
+                      name: billName != product.name ? billName : null,
                     );
                   }
 
@@ -303,7 +317,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                     _saleItems.add(
                       SaleItem.create(
                         productUuid: product.uuid,
-                        productName: product.name,
+                        productName: billName,
                         quantity: qty,
                         unitPrice: price,
                         purchasePrice: purchasePrice,
@@ -396,6 +410,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   }
 
   void _editItem(SaleItem item) {
+    final nameController = TextEditingController(text: item.productName);
     final qtyController =
         TextEditingController(text: item.quantity.toStringAsFixed(0));
     final purchaseController =
@@ -407,29 +422,39 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text("Edit ${item.productName}"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: qtyController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Quantity'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: purchaseController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Purchase Price'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: priceController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Sale Price'),
-            ),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Item Name (on bill)',
+                  helperText: 'Edit to change name on this bill only',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: qtyController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Quantity'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: purchaseController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Purchase Price'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: priceController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Sale Price'),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -440,13 +465,16 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
               final qty = double.tryParse(qtyController.text);
               final purchase = double.tryParse(purchaseController.text);
               final price = double.tryParse(priceController.text);
+              final billName = nameController.text.trim();
               if (qty != null &&
                   qty > 0 &&
                   purchase != null &&
                   purchase >= 0 &&
                   price != null &&
-                  price >= 0) {
+                  price >= 0 &&
+                  billName.isNotEmpty) {
                 setState(() {
+                  item.productName = billName;
                   item.quantity = qty.toInt();
                   item.purchasePrice = purchase;
                   item.unitPrice = price;
@@ -584,8 +612,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
         return SaleMetadata.compose(
           visibleComment: c.isEmpty ? null : c,
           payments: paymentEntries,
-          billingMode:
-              _billingMode == BillingMode.ledger ? 'ledger' : 'creditDebit',
+          billingMode: 'creditDebit',
         );
       }(),
       deviceId: _deviceId,
@@ -655,6 +682,9 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
         if (productToUpdate != null) {
           productToUpdate.purchasePrice = newPrices.purchasePrice;
           productToUpdate.salePrice = newPrices.salePrice;
+          if (newPrices.name != null && newPrices.name!.isNotEmpty) {
+            productToUpdate.name = newPrices.name!;
+          }
           await _db.updateProduct(productToUpdate);
         }
       }
@@ -792,35 +822,6 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: SegmentedButton<BillingMode>(
-                  segments: const [
-                    ButtonSegment(
-                      value: BillingMode.creditDebit,
-                      label: Text('Credit/Debit'),
-                      icon: Icon(Icons.receipt),
-                    ),
-                    ButtonSegment(
-                      value: BillingMode.ledger,
-                      label: Text('Ledger Bill'),
-                      icon: Icon(Icons.account_balance),
-                    ),
-                  ],
-                  selected: {_billingMode},
-                  onSelectionChanged: (selection) {
-                    setState(() => _billingMode = selection.first);
-                  },
-                ),
-              ),
-              if (_billingMode == BillingMode.ledger)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8, bottom: 4),
-                  child: Text(
-                    'Ledger format supports sales, receipts, returns, rate differences, purchases, and closing-balance style accounting.',
-                    style: TextStyle(color: Colors.grey.shade700),
-                  ),
-                ),
               const SizedBox(height: 10),
               RadioListTile<SaleType>(
                 title: const Text('Cash Sale'),

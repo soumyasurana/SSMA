@@ -3,6 +3,7 @@ import 'package:ssma/models/product.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/device_service.dart'; // <-- for deviceId
 import 'package:ssma/sync/v2/sync_initializer_v2.dart' show syncV2;
+import 'package:ssma/utils/search_utils.dart';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart';
@@ -54,26 +55,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
   // ===================== EXCEL IMPORT =====================
 
   Future<void> _importExcel() async {
-    print("IMPORT CLICKED");
-
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.any, // ✅ FIXED
-      withData: true, // 🔥 IMPORTANT
+      type: FileType.any,
+      withData: true,
     );
 
-    print(result);
-
-    if (result == null) {
-      print("❌ Picker failed or cancelled");
-      return;
-    }
+    if (result == null) return;
 
     final file = result.files.single;
 
-    if (file.path == null) {
-      print("❌ Path is null");
-      return;
-    }
+    if (file.path == null) return;
 
     final bytes = await File(file.path!).readAsBytes();
 
@@ -145,22 +136,28 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Future<void> _loadProducts() async {
     final products = await DBService.getProducts();
-    final query = _searchController.text.toLowerCase();
+    final query = _searchController.text;
     setState(() {
       _products = products;
       _filteredProducts = query.isEmpty
           ? products
-          : products
-              .where((p) => p.name.toLowerCase().contains(query))
-              .toList();
+          : SearchUtils.fuzzySort<Product>(
+              products,
+              query,
+              (p) => p.name,
+            );
     });
   }
 
   void _filterProducts(String query) {
-    final q = query.trim().toLowerCase();
     setState(() {
-      _filteredProducts =
-          _products.where((p) => p.name.toLowerCase().contains(q)).toList();
+      _filteredProducts = query.isEmpty
+          ? _products
+          : SearchUtils.fuzzySort<Product>(
+              _products,
+              query,
+              (p) => p.name,
+            );
     });
   }
 
@@ -340,6 +337,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
               decoration: InputDecoration(
                 hintText: 'Search products...',
                 prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Icons.close),
+                        onPressed: () {
+                          _searchController.clear();
+                          _filterProducts('');
+                        },
+                      ),
                 border:
                     OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),

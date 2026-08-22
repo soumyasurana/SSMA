@@ -918,7 +918,8 @@ class _GodownStockScreenState extends State<GodownStockScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: Colors.indigo,
+        backgroundColor: Colors.deepOrange,
+        foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text('Add Godown Stock'),
         onPressed: _showAddStockDialog,

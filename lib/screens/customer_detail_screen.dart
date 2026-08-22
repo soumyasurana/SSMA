@@ -170,12 +170,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         actions: [
           IconButton(
             tooltip: "Download Ledger PDF",
+            style: IconButton.styleFrom(foregroundColor: Colors.deepOrange),
             icon: _isGeneratingLedger
                 ? const SizedBox(
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2),
+                        color: Colors.deepOrange, strokeWidth: 2),
                   )
                 : const Icon(Icons.picture_as_pdf),
             onPressed: _isGeneratingLedger ? null : _generateLedger,
@@ -227,7 +228,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                         : const Icon(Icons.picture_as_pdf),
                     label: const Text("Download Ledger PDF"),
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.indigo),
+                        backgroundColor: Colors.deepOrange),
                   ),
                   if (_pendingDues > 0) ...[
                     const SizedBox(width: 12),
