@@ -57,12 +57,12 @@ class _CustomerScreenState extends State<CustomerScreen> {
             sale.saleType == SaleType.credit,
       );
 
-      double pending = 0.0;
-      for (final sale in customerSales) {
-        pending += (sale.totalAmount - sale.amountReceived).clamp(0.0, double.infinity);
-      }
+      final dues = customerSales.fold(
+        0.0,
+        (sum, sale) => sum + (sale.totalAmount - sale.amountReceived),
+      );
 
-      customer.pendingDues = pending;
+      customer.pendingDues = dues.clamp(0.0, double.infinity);
     }
 
     customers.sort(
@@ -71,7 +71,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
     setState(() {
       _customers = customers;
-      _filteredCustomers = customers;
+      _filterCustomers(_searchController.text);
     });
   }
 

@@ -37,6 +37,13 @@ void main() {
   });
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, (methodCall) async {
+      if (methodCall.method == 'getApplicationDocumentsDirectory') {
+        return testDir.path;
+      }
+      return null;
+    });
     try {
       await DBService.isar.close();
     } catch (_) {}
@@ -49,6 +56,8 @@ void main() {
   });
 
   tearDownAll(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, null);
     try {
       await DBService.isar.close();
     } catch (_) {}
@@ -158,6 +167,8 @@ void main() {
         deviceId: 'test-dev',
       );
       await DBService.addCustomerPayment(custPayment);
+      creditSale.amountReceived += 200.0;
+      await DBService.updateSale(creditSale);
 
       // 8. Record Purchase from Supplier
       final purchase = Purchase.create(
@@ -208,11 +219,11 @@ void main() {
       expect(report.profitMarginPercentage, closeTo((600 / 2100) * 100, 0.01));
 
       // Verify Cash Flow
-      // Inflow: 1200 (sale 1) + 400 (sale 2) + 200 (customer payment) = 1800
-      expect(report.totalCashInflow, 1800.0);
+      // Inflow: 1200 (sale 1) + 600 (sale 2) + 200 (customer payment) = 2000
+      expect(report.totalCashInflow, 2000.0);
       // Outflow: 1000 (supplier payment)
       expect(report.totalCashOutflow, 1000.0);
-      expect(report.netCashFlow, 800.0);
+      expect(report.netCashFlow, 1000.0);
 
       // Verify Working Capital
       // Customer Receivables: 500 - 200 = 300

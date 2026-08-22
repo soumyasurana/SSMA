@@ -109,18 +109,29 @@ class DashboardService {
     final allSuppliers = await isar.suppliers.filter().deletedEqualTo(false).findAll();
 
     // 4. Compute Receivables
+    final allSalesList = await isar.sales.filter().deletedEqualTo(false).findAll();
+    final Map<String, double> customerSalesDues = {};
+    for (final sale in allSalesList) {
+      if (sale.saleType == SaleType.credit && sale.customerUuid != null && sale.customerUuid!.isNotEmpty) {
+        final remaining = sale.totalAmount - sale.amountReceived;
+        customerSalesDues[sale.customerUuid!] =
+            (customerSalesDues[sale.customerUuid!] ?? 0.0) + remaining;
+      }
+    }
+
     double receivablesTotal = 0.0;
     int receivablesCustomerCount = 0;
     final List<OutstandingCustomerData> customerOutstandings = [];
 
     for (final customer in allCustomers) {
-      if (customer.pendingDues > 0) {
-        receivablesTotal += customer.pendingDues;
+      final dues = (customerSalesDues[customer.uuid] ?? 0.0).clamp(0.0, double.infinity);
+      if (dues > 0) {
+        receivablesTotal += dues;
         receivablesCustomerCount++;
         customerOutstandings.add(OutstandingCustomerData(
           customerUuid: customer.uuid,
           customerName: customer.name,
-          outstandingAmount: customer.pendingDues,
+          outstandingAmount: dues,
         ));
       }
     }

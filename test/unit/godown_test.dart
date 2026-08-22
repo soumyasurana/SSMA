@@ -28,6 +28,13 @@ void main() {
   });
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, (methodCall) async {
+      if (methodCall.method == 'getApplicationDocumentsDirectory') {
+        return testDir.path;
+      }
+      return null;
+    });
     try {
       await DBService.isar.close();
     } catch (_) {}
@@ -41,6 +48,8 @@ void main() {
   });
 
   tearDownAll(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, null);
     try {
       await DBService.isar.close();
     } catch (_) {}

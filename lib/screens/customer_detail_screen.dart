@@ -60,7 +60,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         .toList();
 
     double dues = relevantSales.fold(
-        0, (sum, sale) => sum + (sale.totalAmount - sale.amountReceived));
+        0.0, (sum, sale) => sum + (sale.totalAmount - sale.amountReceived));
+    dues = dues.clamp(0.0, double.infinity);
 
     final payments = await DBService.getCustomerPaymentsByCustomerUuid(
       widget.customer.uuid,

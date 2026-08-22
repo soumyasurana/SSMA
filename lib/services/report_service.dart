@@ -134,6 +134,7 @@ class ReportService {
     final allProducts = await isar.products.filter().deletedEqualTo(false).findAll();
     final allCustomers = await isar.customers.filter().deletedEqualTo(false).findAll();
     final allSuppliers = await isar.suppliers.filter().deletedEqualTo(false).findAll();
+    final allSales = await isar.sales.filter().deletedEqualTo(false).findAll();
     final allPurchases = await isar.purchases.filter().deletedEqualTo(false).findAll();
     final allSupplierPayments = await isar.supplierPayments.filter().deletedEqualTo(false).findAll();
     final allGodownItems = await isar.godownItems.filter().deletedEqualTo(false).findAll();
@@ -279,11 +280,24 @@ class ReportService {
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
     // ─── Customer Receivables ──────────────────────────────────────────────
+    final Map<String, double> customerSalesDues = {};
+    for (final sale in allSales) {
+      if (sale.saleType == SaleType.credit &&
+          sale.customerUuid != null &&
+          sale.customerUuid!.isNotEmpty) {
+        final remaining = sale.totalAmount - sale.amountReceived;
+        customerSalesDues[sale.customerUuid!] =
+            (customerSalesDues[sale.customerUuid!] ?? 0.0) + remaining;
+      }
+    }
+
     double totalCustomerReceivables = 0.0;
     final List<CustomerReportItem> allCustomerReports = [];
     for (final customer in allCustomers) {
-      if (customer.pendingDues > 0) {
-        totalCustomerReceivables += customer.pendingDues;
+      final currentDue =
+          (customerSalesDues[customer.uuid] ?? 0.0).clamp(0.0, double.infinity);
+      if (currentDue > 0) {
+        totalCustomerReceivables += currentDue;
       }
       final agg = customerStats[customer.uuid] ?? customerStats[customer.name];
       allCustomerReports.add(CustomerReportItem(
@@ -293,7 +307,7 @@ class ReportService {
         orderCount: agg?.orderCount ?? 0,
         totalBilled: agg?.totalBilled ?? 0.0,
         totalPaid: agg?.totalPaid ?? 0.0,
-        currentOutstanding: customer.pendingDues,
+        currentOutstanding: currentDue,
       ));
     }
 

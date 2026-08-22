@@ -16,12 +16,12 @@ void main() {
 
     test('partial party searches match names and phones', () {
       final results = SearchUtils.fuzzySort<String>(
-        ['Recent Electronics 9810159367', 'Surana Traders 111'],
-        'recent 9810',
+        ['Recent Electronics 9312801482', 'Surana Traders 111'],
+        'recent 9312',
         (item) => item,
       );
 
-      expect(results, contains('Recent Electronics 9810159367'));
+      expect(results, contains('Recent Electronics 9312801482'));
     });
   });
 
