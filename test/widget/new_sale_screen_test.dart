@@ -148,7 +148,7 @@ void main() {
     // Check item added and total updated
     expect(find.text('No items added.'), findsNothing);
     expect(find.byKey(const Key('addedItem_Item#1')), findsOneWidget);
-    expect(find.text('Rs.0.00'), findsNothing);
+    expect(find.textContaining('Rs.100.00'), findsWidgets);
 
     // Complete sale
     final saveButton = find.byKey(const Key('saveSaleButton'));

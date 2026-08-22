@@ -53,96 +53,96 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
   // ===================== EXCEL IMPORT =====================
 
-Future<void> _importExcel() async {
-  print("IMPORT CLICKED");
+  Future<void> _importExcel() async {
+    print("IMPORT CLICKED");
 
-  final result = await FilePicker.platform.pickFiles(
-    type: FileType.any, // ✅ FIXED
-    withData: true,     // 🔥 IMPORTANT
-  );
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any, // ✅ FIXED
+      withData: true, // 🔥 IMPORTANT
+    );
 
-  print(result);
+    print(result);
 
-  if (result == null) {
-    print("❌ Picker failed or cancelled");
-    return;
+    if (result == null) {
+      print("❌ Picker failed or cancelled");
+      return;
+    }
+
+    final file = result.files.single;
+
+    if (file.path == null) {
+      print("❌ Path is null");
+      return;
+    }
+
+    final bytes = await File(file.path!).readAsBytes();
+
+    await _processExcel(bytes);
   }
 
-  final file = result.files.single;
+  Future<void> _processExcel(Uint8List bytes) async {
+    final excel = Excel.decodeBytes(bytes);
+    final deviceId = await DeviceService.getDeviceId();
 
-if (file.path == null) {
-  print("❌ Path is null");
-  return;
-}
+    int success = 0;
+    int failed = 0;
 
-final bytes = await File(file.path!).readAsBytes();
+    for (var table in excel.tables.keys) {
+      final rows = excel.tables[table]!.rows;
 
-await _processExcel(bytes);
-}
+      for (int i = 1; i < rows.length; i++) {
+        final row = rows[i];
 
-Future<void> _processExcel(Uint8List bytes) async {
-  final excel = Excel.decodeBytes(bytes);
-  final deviceId = await DeviceService.getDeviceId();
+        try {
+          final name = row[0]?.value?.toString().trim() ?? '';
+          final purchasePrice =
+              double.tryParse(row[1]?.value.toString() ?? '') ?? 0;
+          final salePrice =
+              double.tryParse(row[2]?.value.toString() ?? '') ?? 0;
+          final quantity = int.tryParse(row[3]?.value.toString() ?? '') ?? 0;
 
-  int success = 0;
-  int failed = 0;
+          // SAME VALIDATION (unchanged logic)
+          if (name.isEmpty || purchasePrice < 0 || salePrice < 0) {
+            failed++;
+            continue;
+          }
 
-  for (var table in excel.tables.keys) {
-    final rows = excel.tables[table]!.rows;
+          // SAME DUPLICATE CHECK (unchanged logic)
+          final exists = _products
+              .where((p) => p.name.toLowerCase() == name.toLowerCase());
 
-    for (int i = 1; i < rows.length; i++) {
-      final row = rows[i];
+          if (exists.isNotEmpty) {
+            failed++;
+            continue;
+          }
 
-      try {
-        final name = row[0]?.value?.toString().trim() ?? '';
-        final purchasePrice =
-            double.tryParse(row[1]?.value.toString() ?? '') ?? 0;
-        final salePrice =
-            double.tryParse(row[2]?.value.toString() ?? '') ?? 0;
-        final quantity =
-            int.tryParse(row[3]?.value.toString() ?? '') ?? 0;
+          final product = Product.create(
+            name: name,
+            purchasePrice: purchasePrice,
+            salePrice: salePrice,
+            quantity: quantity,
+            deviceId: deviceId,
+          );
 
-        // SAME VALIDATION (unchanged logic)
-        if (name.isEmpty || purchasePrice < 0 || salePrice < 0) {
+          await DBService.addProduct(product);
+          success++;
+        } catch (e) {
           failed++;
-          continue;
         }
-
-        // SAME DUPLICATE CHECK (unchanged logic)
-        final exists = _products.where((p) =>
-            p.name.toLowerCase() == name.toLowerCase());
-
-        if (exists.isNotEmpty) {
-          failed++;
-          continue;
-        }
-
-        final product = Product.create(
-          name: name,
-          purchasePrice: purchasePrice,
-          salePrice: salePrice,
-          quantity: quantity,
-          deviceId: deviceId,
-        );
-
-        await DBService.addProduct(product);
-        success++;
-      } catch (e) {
-        failed++;
       }
     }
+
+    await _loadProducts();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Import complete: $success added, $failed failed'),
+      ),
+    );
   }
 
-  await _loadProducts();
-
-  if (!mounted) return;
-
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text('Import complete: $success added, $failed failed'),
-    ),
-  );
-}
   Future<void> _loadProducts() async {
     final products = await DBService.getProducts();
     final query = _searchController.text.toLowerCase();
@@ -150,7 +150,9 @@ Future<void> _processExcel(Uint8List bytes) async {
       _products = products;
       _filteredProducts = query.isEmpty
           ? products
-          : products.where((p) => p.name.toLowerCase().contains(query)).toList();
+          : products
+              .where((p) => p.name.toLowerCase().contains(query))
+              .toList();
     });
   }
 
@@ -227,7 +229,8 @@ Future<void> _processExcel(Uint8List bytes) async {
                 if (purchasePrice <= 0 || salePrice <= 0 || quantity < 0) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                        content: Text('Enter valid prices and a non-negative quantity.')),
+                        content: Text(
+                            'Enter valid prices and a non-negative quantity.')),
                   );
                   return;
                 }
@@ -241,7 +244,8 @@ Future<void> _processExcel(Uint8List bytes) async {
                 if (existing.isNotEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                        content: Text('A product with this name already exists.')),
+                        content:
+                            Text('A product with this name already exists.')),
                   );
                   return;
                 }
@@ -299,8 +303,7 @@ Future<void> _processExcel(Uint8List bytes) async {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         title: const Text("Delete Product"),
         content: Text("Are you sure you want to delete '${product.name}'?"),
         actions: [
@@ -311,11 +314,7 @@ Future<void> _processExcel(Uint8List bytes) async {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
-              product.deleted = true;
-              product.isSynced = false;
-              product.version += 1;
-
-              await DBService.updateProduct(product);
+              await DBService.deleteProduct(product.uuid);
 
               if (!context.mounted) return;
               Navigator.pop(context);
@@ -357,71 +356,72 @@ Future<void> _processExcel(Uint8List bytes) async {
                       physics: const AlwaysScrollableScrollPhysics(),
                       child: SizedBox(
                         height: MediaQuery.of(context).size.height * 0.6,
-                        child: const Center(child: Text('No matching products.')),
+                        child:
+                            const Center(child: Text('No matching products.')),
                       ),
                     )
                   : ListView.separated(
                       physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.all(12),
                       itemCount: _filteredProducts.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final p = _filteredProducts[index];
-                      return Card(
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        color: Colors.indigo.shade50,
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 10),
-                          title: Text(
-                            p.name,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.bold),
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final p = _filteredProducts[index];
+                        return Card(
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          color: Colors.indigo.shade50,
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 10),
+                            title: Text(
+                              p.name,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              'Qty: ${p.quantity} | Buy: ₹${p.purchasePrice.toStringAsFixed(2)} | Sale: ₹${p.salePrice.toStringAsFixed(2)}',
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit,
+                                      color: Colors.blue),
+                                  onPressed: () =>
+                                      _showProductDialog(product: p),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete,
+                                      color: Colors.red),
+                                  onPressed: () => _confirmDelete(p),
+                                ),
+                              ],
+                            ),
                           ),
-                          subtitle: Text(
-                            'Qty: ${p.quantity} | Buy: ₹${p.purchasePrice.toStringAsFixed(2)} | Sale: ₹${p.salePrice.toStringAsFixed(2)}',
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit,
-                                    color: Colors.blue),
-                                onPressed: () =>
-                                    _showProductDialog(product: p),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete,
-                                    color: Colors.red),
-                                onPressed: () => _confirmDelete(p),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                        );
+                      },
+                    ),
             ),
           ),
         ],
       ),
-floatingActionButton: Column(
-  mainAxisSize: MainAxisSize.min,
-  children: [
-    FloatingActionButton.extended(
-      onPressed: _importExcel,
-      icon: const Icon(Icons.upload_file),
-      label: const Text('Import'),
-    ),
-    const SizedBox(height: 10),
-    FloatingActionButton.extended(
-      onPressed: () => _showProductDialog(),
-      icon: const Icon(Icons.add),
-      label: const Text('Add Product'),
-    ),
-  ],
-),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+            onPressed: _importExcel,
+            icon: const Icon(Icons.upload_file),
+            label: const Text('Import'),
+          ),
+          const SizedBox(height: 10),
+          FloatingActionButton.extended(
+            onPressed: () => _showProductDialog(),
+            icon: const Icon(Icons.add),
+            label: const Text('Add Product'),
+          ),
+        ],
+      ),
     );
   }
 }

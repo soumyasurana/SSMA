@@ -6,6 +6,22 @@ import 'package:ssma/models/sale_item.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/device_service.dart';
 import 'package:ssma/services/pdf_service.dart';
+import 'package:ssma/utils/sale_metadata.dart';
+import 'package:ssma/utils/search_utils.dart';
+
+enum BillingMode { creditDebit, ledger }
+
+enum PriceChangeMode { temporary, permanent }
+
+class _PendingPriceUpdate {
+  final double purchasePrice;
+  final double salePrice;
+
+  const _PendingPriceUpdate({
+    required this.purchasePrice,
+    required this.salePrice,
+  });
+}
 
 /// Minimal interface used by NewSaleScreen so tests can inject a fake.
 abstract class IDBService {
@@ -29,10 +45,12 @@ class RealDBServiceAdapter implements IDBService {
   Future<void> recordSale(Sale sale) => DBService.recordSale(sale);
 
   @override
-  Future<void> updateProduct(Product product) => DBService.updateProduct(product);
+  Future<void> updateProduct(Product product) =>
+      DBService.updateProduct(product);
 
   @override
-  Future<Product?> getProductByUuid(String uuid) => DBService.getProductByUuid(uuid);
+  Future<Product?> getProductByUuid(String uuid) =>
+      DBService.getProductByUuid(uuid);
 }
 
 class NewSaleScreen extends StatefulWidget {
@@ -55,9 +73,11 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
 
   final TextEditingController _buyerNameController = TextEditingController();
   final TextEditingController _buyerContactController = TextEditingController();
-  final TextEditingController _searchProductController = TextEditingController();
+  final TextEditingController _searchProductController =
+      TextEditingController();
   final TextEditingController _commentController = TextEditingController();
-  final TextEditingController _amountReceivedController = TextEditingController();
+  final TextEditingController _amountReceivedController =
+      TextEditingController();
   final List<Map<String, TextEditingController>> _extraCharges = [];
 
   SaleType _selectedSaleType = SaleType.cash;
@@ -65,7 +85,9 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   DateTime _selectedDate = DateTime.now();
   String _deviceId = '';
   bool _isSaving = false;
-  Map<String, double> _productsToUpdatePrice = {};
+  BillingMode _billingMode = BillingMode.creditDebit;
+  final Map<String, _PendingPriceUpdate> _productsToUpdatePrice = {};
+  final List<Map<String, TextEditingController>> _paymentRows = [];
 
   // convenience getter that returns injected service or default real adapter
   IDBService get _db => widget.dbService ?? RealDBServiceAdapter();
@@ -80,13 +102,23 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
 
     if (widget.existingSale != null) {
       final sale = widget.existingSale!;
+      final metadata = SaleMetadata.parse(sale.comment);
       _saleItems = List.from(sale.items);
       _buyerNameController.text = sale.buyerName ?? '';
       _buyerContactController.text = sale.buyerContact ?? '';
-      _commentController.text = sale.comment ?? '';
+      _commentController.text = metadata.visibleComment ?? '';
       _amountReceivedController.text = sale.amountReceived.toString();
       _selectedDate = sale.date;
       _selectedSaleType = sale.saleType;
+      _billingMode = metadata.billingMode == 'ledger'
+          ? BillingMode.ledger
+          : BillingMode.creditDebit;
+      for (final payment in metadata.payments) {
+        _paymentRows.add({
+          'method': TextEditingController(text: payment.method),
+          'amount': TextEditingController(text: payment.amount.toString()),
+        });
+      }
     }
   }
 
@@ -101,6 +133,10 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       charge['key']!.dispose();
       charge['value']!.dispose();
     }
+    for (final payment in _paymentRows) {
+      payment['method']!.dispose();
+      payment['amount']!.dispose();
+    }
     super.dispose(); // must be last
   }
 
@@ -109,6 +145,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     // -> now uses injected service (or real adapter)
     final products = await _db.getProducts();
     final customers = await _db.getCustomers();
+    if (!mounted) return;
     setState(() {
       _products = products;
       _filteredProducts = products;
@@ -116,7 +153,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     });
 
     // Preselect customer if editing and it's a credit sale
-    if (widget.existingSale != null && widget.existingSale!.saleType == SaleType.credit) {
+    if (widget.existingSale != null &&
+        widget.existingSale!.saleType == SaleType.credit) {
       final match = customers.firstWhere(
         (c) =>
             c.name == widget.existingSale!.buyerName &&
@@ -127,25 +165,29 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     }
   }
 
-
   double _calculateExtraCharges() {
-  return _extraCharges.fold(0.0, (sum, charge) {
-    return sum + (double.tryParse(charge['value']!.text) ?? 0.0);
-  });
+    return _extraCharges.fold(0.0, (sum, charge) {
+      return sum + (double.tryParse(charge['value']!.text) ?? 0.0);
+    });
   }
 
   void _filterProducts(String query) {
-    final lower = query.toLowerCase();
     setState(() {
-      _filteredProducts = _products.where((p) => p.name.toLowerCase().contains(lower)).toList();
+      _filteredProducts = SearchUtils.fuzzySort<Product>(
+        _products,
+        query,
+        (product) => product.name,
+      );
     });
   }
 
   void _showQuantityDialog(Product product) {
     final qtyController = TextEditingController(text: '1');
+    final purchasePriceController =
+        TextEditingController(text: product.purchasePrice.toStringAsFixed(2));
     final priceController =
         TextEditingController(text: product.salePrice.toStringAsFixed(2));
-    bool updateInventoryPrice = false;
+    PriceChangeMode priceMode = PriceChangeMode.temporary;
 
     if (product.quantity <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -175,21 +217,38 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
               ),
               const SizedBox(height: 8),
               TextField(
-                controller: priceController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Sale Price'),
+                controller: purchasePriceController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Purchase Price'),
               ),
               const SizedBox(height: 8),
-              CheckboxListTile(
-                title: const Text('Update price in inventory as well'),
-                value: updateInventoryPrice,
-                onChanged: (val) {
+              TextField(
+                controller: priceController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Selling Price'),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<PriceChangeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: PriceChangeMode.temporary,
+                    label: Text('This bill only'),
+                    icon: Icon(Icons.receipt_long),
+                  ),
+                  ButtonSegment(
+                    value: PriceChangeMode.permanent,
+                    label: Text('Save to inventory'),
+                    icon: Icon(Icons.inventory),
+                  ),
+                ],
+                selected: {priceMode},
+                onSelectionChanged: (selection) {
                   setDialogState(() {
-                    updateInventoryPrice = val ?? false;
+                    priceMode = selection.first;
                   });
                 },
-                controlAffinity: ListTileControlAffinity.leading,
-                contentPadding: EdgeInsets.zero,
               ),
             ],
           ),
@@ -200,11 +259,43 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
             ElevatedButton(
               onPressed: () async {
                 final qty = int.tryParse(qtyController.text);
+                final purchasePrice =
+                    double.tryParse(purchasePriceController.text);
                 final price = double.tryParse(priceController.text);
 
-                if (qty != null && qty > 0 && price != null && price >= 0) {
-                  if (updateInventoryPrice) {
-                    _productsToUpdatePrice[product.uuid] = price;
+                if (qty != null &&
+                    qty > 0 &&
+                    purchasePrice != null &&
+                    purchasePrice >= 0 &&
+                    price != null &&
+                    price >= 0) {
+                  if (priceMode == PriceChangeMode.permanent) {
+                    final confirmed = await showDialog<bool>(
+                      context: innerContext,
+                      builder: (confirmContext) => AlertDialog(
+                        title: const Text('Save prices to inventory?'),
+                        content: Text(
+                          'Future bills will use purchase ₹${purchasePrice.toStringAsFixed(2)} and selling ₹${price.toStringAsFixed(2)} for ${product.name}.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.pop(confirmContext, false),
+                            child: const Text('Keep Temporary'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () =>
+                                Navigator.pop(confirmContext, true),
+                            child: const Text('Save Permanently'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed != true) return;
+                    _productsToUpdatePrice[product.uuid] = _PendingPriceUpdate(
+                      purchasePrice: purchasePrice,
+                      salePrice: price,
+                    );
                   }
 
                   if (!mounted) return;
@@ -215,7 +306,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                         productName: product.name,
                         quantity: qty,
                         unitPrice: price,
-                        purchasePrice: product.purchasePrice,
+                        purchasePrice: purchasePrice,
                         deviceId: _deviceId,
                       ),
                     );
@@ -232,7 +323,6 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       ),
     );
   }
-
 
   void _showCustomItemDialog() {
     final nameController = TextEditingController();
@@ -255,8 +345,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
               controller: purchaseController,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              decoration:
-                  const InputDecoration(labelText: 'Purchase Price'),
+              decoration: const InputDecoration(labelText: 'Purchase Price'),
             ),
             TextField(
               controller: saleController,
@@ -309,6 +398,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   void _editItem(SaleItem item) {
     final qtyController =
         TextEditingController(text: item.quantity.toStringAsFixed(0));
+    final purchaseController =
+        TextEditingController(text: item.purchasePrice.toStringAsFixed(2));
     final priceController =
         TextEditingController(text: item.unitPrice.toStringAsFixed(2));
 
@@ -326,6 +417,13 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
             ),
             const SizedBox(height: 8),
             TextField(
+              controller: purchaseController,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Purchase Price'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
               controller: priceController,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
@@ -340,11 +438,19 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
           ElevatedButton(
             onPressed: () {
               final qty = double.tryParse(qtyController.text);
+              final purchase = double.tryParse(purchaseController.text);
               final price = double.tryParse(priceController.text);
-              if (qty != null && qty > 0 && price != null && price >= 0) {
+              if (qty != null &&
+                  qty > 0 &&
+                  purchase != null &&
+                  purchase >= 0 &&
+                  price != null &&
+                  price >= 0) {
                 setState(() {
                   item.quantity = qty.toInt();
+                  item.purchasePrice = purchase;
                   item.unitPrice = price;
+                  item.total = item.quantity * item.unitPrice;
                 });
               }
               Navigator.pop(context);
@@ -364,16 +470,48 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
   }
 
   double _calculateTotalAmount() {
-    final itemsTotal = _saleItems.fold(0.0, (sum, item) => sum + item.unitPrice * item.quantity);
+    final itemsTotal = _saleItems.fold(
+        0.0, (sum, item) => sum + item.unitPrice * item.quantity);
     return itemsTotal + _calculateExtraCharges();
   }
 
-    Future<void> _completeSale() async {
+  List<SalePaymentEntry> _collectPayments() {
+    return _paymentRows
+        .map((row) {
+          final method = row['method']!.text.trim();
+          final amount = double.tryParse(row['amount']!.text.trim()) ?? 0;
+          return SalePaymentEntry(
+            method: method.isEmpty ? 'Payment' : method,
+            amount: amount,
+          );
+        })
+        .where((entry) => entry.amount > 0)
+        .toList();
+  }
+
+  double _paymentTotal() {
+    if (_paymentRows.isEmpty) {
+      return double.tryParse(_amountReceivedController.text.trim()) ?? 0.0;
+    }
+    return _collectPayments().fold(0.0, (sum, entry) => sum + entry.amount);
+  }
+
+  void _addPaymentRow({String method = 'Cash', String amount = ''}) {
+    setState(() {
+      _paymentRows.add({
+        'method': TextEditingController(text: method),
+        'amount': TextEditingController(text: amount),
+      });
+    });
+  }
+
+  Future<void> _completeSale() async {
     if (_isSaving) return;
 
     if (_saleItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add at least one item to complete sale.')),
+        const SnackBar(
+            content: Text('Add at least one item to complete sale.')),
       );
       return;
     }
@@ -403,7 +541,21 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
 
     if (_deviceId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Device not ready yet. Please try again.')),
+        const SnackBar(
+            content: Text('Device not ready yet. Please try again.')),
+      );
+      return;
+    }
+
+    final totalAmount = _calculateTotalAmount();
+    final paymentEntries = _collectPayments();
+    final amountReceived = _paymentRows.isEmpty
+        ? (double.tryParse(_amountReceivedController.text.trim()) ?? 0.0)
+        : paymentEntries.fold(0.0, (sum, entry) => sum + entry.amount);
+
+    if (amountReceived - totalAmount > 0.01) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Payments cannot exceed bill total.')),
       );
       return;
     }
@@ -412,9 +564,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       customerUuid: _selectedCustomer?.uuid,
       buyerName: buyerName,
       buyerContact: buyerContact,
-      totalAmount: _calculateTotalAmount(),
-      amountReceived:
-          double.tryParse(_amountReceivedController.text) ?? 0.0,
+      totalAmount: totalAmount,
+      amountReceived: amountReceived,
       date: _selectedDate,
       items: _saleItems,
       saleType: _selectedSaleType,
@@ -422,12 +573,20 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
         String c = _commentController.text.trim();
         if (_extraCharges.isNotEmpty) {
           final lines = _extraCharges
-              .where((e) => e['key']!.text.isNotEmpty && e['value']!.text.isNotEmpty)
+              .where((e) =>
+                  e['key']!.text.isNotEmpty && e['value']!.text.isNotEmpty)
               .map((e) => '${e['key']!.text}: Rs.${e['value']!.text}')
               .join(', ');
-          if (lines.isNotEmpty) c = c.isEmpty ? 'Charges: $lines' : '$c | Charges: $lines';
+          if (lines.isNotEmpty) {
+            c = c.isEmpty ? 'Charges: $lines' : '$c | Charges: $lines';
+          }
         }
-        return c.isEmpty ? null : c;
+        return SaleMetadata.compose(
+          visibleComment: c.isEmpty ? null : c,
+          payments: paymentEntries,
+          billingMode:
+              _billingMode == BillingMode.ledger ? 'ledger' : 'creditDebit',
+        );
       }(),
       deviceId: _deviceId,
     );
@@ -435,6 +594,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     if (widget.existingSale != null) {
       newSale.isarId = widget.existingSale!.isarId;
       newSale.uuid = widget.existingSale!.uuid;
+      newSale.createdAt = widget.existingSale!.createdAt;
+      newSale.version = widget.existingSale!.version + 1;
     }
 
     // Stock warning check (fixed: by productUuid)
@@ -446,8 +607,7 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
       if (matchingProduct != null) {
         final projectedQty = matchingProduct.quantity - item.quantity;
         if (projectedQty < 0) {
-          warningItems.add(
-              '${item.productName} (will be $projectedQty)');
+          warningItems.add('${item.productName} (will be $projectedQty)');
         }
       }
     }
@@ -487,13 +647,14 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     try {
       await _db.recordSale(newSale);
       await PDFService.generateInvoice(newSale);
-      
+
       for (final entry in _productsToUpdatePrice.entries) {
         final productUuid = entry.key;
-        final newPrice = entry.value;
+        final newPrices = entry.value;
         final productToUpdate = await _db.getProductByUuid(productUuid);
         if (productToUpdate != null) {
-          productToUpdate.salePrice = newPrice;
+          productToUpdate.purchasePrice = newPrices.purchasePrice;
+          productToUpdate.salePrice = newPrices.salePrice;
           await _db.updateProduct(productToUpdate);
         }
       }
@@ -515,6 +676,11 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
         _amountReceivedController.clear();
         _selectedDate = DateTime.now();
         _productsToUpdatePrice.clear();
+        for (final payment in _paymentRows) {
+          payment['method']!.dispose();
+          payment['amount']!.dispose();
+        }
+        _paymentRows.clear();
       });
     } catch (e) {
       if (!mounted) return;
@@ -541,6 +707,81 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
     );
   }
 
+  Widget _buildCustomerSearch() {
+    return RawAutocomplete<Customer>(
+      displayStringForOption: (customer) =>
+          '${customer.name}${customer.phone == null ? '' : ' (${customer.phone})'}',
+      optionsBuilder: (textEditingValue) {
+        return SearchUtils.fuzzySort<Customer>(
+          _customers,
+          textEditingValue.text,
+          (customer) => '${customer.name} ${customer.phone ?? ''}',
+        ).take(30);
+      },
+      onSelected: (customer) {
+        setState(() {
+          _selectedCustomer = customer;
+          _buyerNameController.text = customer.name;
+          _buyerContactController.text = customer.phone ?? '';
+        });
+      },
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        if (_selectedCustomer != null && controller.text.isEmpty) {
+          controller.text =
+              '${_selectedCustomer!.name} (${_selectedCustomer!.phone ?? 'No phone'})';
+        }
+        return TextField(
+          key: const Key('customerSearchField'),
+          controller: controller,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            labelText: 'Search Party / Customer',
+            hintText: 'Type party name or phone',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: _selectedCustomer == null
+                ? null
+                : IconButton(
+                    tooltip: 'Clear selected party',
+                    icon: const Icon(Icons.close),
+                    onPressed: () {
+                      controller.clear();
+                      setState(() {
+                        _selectedCustomer = null;
+                        _buyerNameController.clear();
+                        _buyerContactController.clear();
+                      });
+                    },
+                  ),
+            border: const OutlineInputBorder(),
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260, maxWidth: 420),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: options.length,
+                itemBuilder: (context, index) {
+                  final customer = options.elementAt(index);
+                  return ListTile(
+                    title: Text(customer.name),
+                    subtitle: Text(customer.phone ?? 'No phone'),
+                    onTap: () => onSelected(customer),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -551,6 +792,36 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SegmentedButton<BillingMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: BillingMode.creditDebit,
+                      label: Text('Credit/Debit'),
+                      icon: Icon(Icons.receipt),
+                    ),
+                    ButtonSegment(
+                      value: BillingMode.ledger,
+                      label: Text('Ledger Bill'),
+                      icon: Icon(Icons.account_balance),
+                    ),
+                  ],
+                  selected: {_billingMode},
+                  onSelectionChanged: (selection) {
+                    setState(() => _billingMode = selection.first);
+                  },
+                ),
+              ),
+              if (_billingMode == BillingMode.ledger)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8, bottom: 4),
+                  child: Text(
+                    'Ledger format supports sales, receipts, returns, rate differences, purchases, and closing-balance style accounting.',
+                    style: TextStyle(color: Colors.grey.shade700),
+                  ),
+                ),
+              const SizedBox(height: 10),
               RadioListTile<SaleType>(
                 title: const Text('Cash Sale'),
                 value: SaleType.cash,
@@ -578,28 +849,13 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
               ),
               const SizedBox(height: 10),
               if (_selectedSaleType == SaleType.cash) ...[
-                _buildTextField(_buyerNameController, 'Buyer Name', key: const Key('buyerNameField')),
+                _buildTextField(_buyerNameController, 'Buyer Name',
+                    key: const Key('buyerNameField')),
                 const SizedBox(height: 10),
-                _buildTextField(_buyerContactController, 'Buyer Contact', isPhone: true, key: const Key('buyerContactField')),
+                _buildTextField(_buyerContactController, 'Buyer Contact',
+                    isPhone: true, key: const Key('buyerContactField')),
               ] else ...[
-                DropdownButtonFormField<Customer>(
-                  value: _selectedCustomer,
-                  items: _customers.map((c) {
-                    return DropdownMenuItem(
-                      value: c,
-                      child: Text('${c.name} (${c.phone})'),
-                    );
-                  }).toList(),
-                  onChanged: (c) {
-                    setState(() {
-                      _selectedCustomer = c;
-                    });
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Select Customer',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
+                _buildCustomerSearch(),
               ],
               const SizedBox(height: 16),
               Row(
@@ -611,7 +867,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                       decoration: InputDecoration(
                         labelText: 'Search Products',
                         prefixIcon: const Icon(Icons.search),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   ),
@@ -621,7 +878,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                     onPressed: _showCustomItemDialog,
                     icon: const Icon(Icons.add),
                     label: const Text('Custom Item'),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                    style:
+                        ElevatedButton.styleFrom(backgroundColor: Colors.teal),
                   ),
                 ],
               ),
@@ -662,8 +920,9 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                             key: Key('addedItem_${item.productName}'),
                             title: Text(item.productName),
                             subtitle: Text(
-                              'Qty: ${item.quantity} x ₹${item.unitPrice.toStringAsFixed(2)} = ₹${(item.unitPrice * item.quantity).toStringAsFixed(2)}',
+                              'Qty: ${item.quantity} x ₹${item.unitPrice.toStringAsFixed(2)} = ₹${(item.unitPrice * item.quantity).toStringAsFixed(2)}\nPurchase: ₹${item.purchasePrice.toStringAsFixed(2)}',
                             ),
+                            isThreeLine: true,
                             onTap: () => _editItem(item),
                             trailing: IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red),
@@ -685,10 +944,132 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
               const SizedBox(height: 10),
               TextField(
                 controller: _amountReceivedController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
                   labelText: 'Amount Received',
                   border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.green.shade200),
+                  borderRadius: BorderRadius.circular(10),
+                  color: Colors.green.shade50,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Payment Breakdown',
+                            style: TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => _addPaymentRow(method: 'Cash'),
+                          icon: const Icon(Icons.payments, size: 18),
+                          label: const Text('Cash'),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => _addPaymentRow(method: 'UPI'),
+                          icon: const Icon(Icons.qr_code, size: 18),
+                          label: const Text('UPI'),
+                        ),
+                        IconButton(
+                          tooltip: 'Add payment method',
+                          onPressed: () => _addPaymentRow(method: 'Bank'),
+                          icon: const Icon(Icons.add_card),
+                        ),
+                      ],
+                    ),
+                    if (_paymentRows.isEmpty)
+                      Text(
+                        'Use Amount Received for a single payment, or add rows for split payments.',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      )
+                    else
+                      ..._paymentRows.asMap().entries.map((entry) {
+                        final i = entry.key;
+                        final payment = entry.value;
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: TextField(
+                                  controller: payment['method'],
+                                  decoration: const InputDecoration(
+                                    labelText: 'Method',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (_) => setState(() {}),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: payment['amount'],
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                          decimal: true),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Amount',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (_) => setState(() {}),
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Remove payment',
+                                icon: const Icon(Icons.close,
+                                    color: Colors.red, size: 20),
+                                onPressed: () {
+                                  setState(() {
+                                    payment['method']!.dispose();
+                                    payment['amount']!.dispose();
+                                    _paymentRows.removeAt(i);
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    const Divider(height: 16),
+                    Row(
+                      children: [
+                        const Text('Received total:'),
+                        const Spacer(),
+                        Text('Rs.${_paymentTotal().toStringAsFixed(2)}'),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        const Text('Remaining:'),
+                        const Spacer(),
+                        Text(
+                          'Rs.${(_calculateTotalAmount() - _paymentTotal()).clamp(0.0, double.infinity).toStringAsFixed(2)}',
+                          style: TextStyle(
+                            color: _calculateTotalAmount() - _paymentTotal() > 0
+                                ? Colors.red
+                                : Colors.green,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 10),
@@ -706,7 +1087,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text('Extra Charges',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                            style: TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w600)),
                         TextButton.icon(
                           onPressed: () {
                             setState(() {
@@ -744,17 +1126,21 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                               flex: 2,
                               child: TextField(
                                 controller: charge['value'],
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                        decimal: true),
                                 decoration: const InputDecoration(
                                   labelText: 'Amount',
                                   border: OutlineInputBorder(),
                                   isDense: true,
                                 ),
-                                onChanged: (_) => setState(() {}), // recompute total live
+                                onChanged: (_) =>
+                                    setState(() {}), // recompute total live
                               ),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.close, color: Colors.red, size: 20),
+                              icon: const Icon(Icons.close,
+                                  color: Colors.red, size: 20),
                               onPressed: () {
                                 setState(() {
                                   charge['key']!.dispose();
@@ -770,10 +1156,11 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                   ],
                 ),
               ),
-              
+
               const SizedBox(height: 10),
               Container(
-                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+                padding:
+                    const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
                 decoration: BoxDecoration(
                   color: Colors.indigo.shade50,
                   borderRadius: BorderRadius.circular(10),
@@ -783,7 +1170,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                   children: [
                     Row(
                       children: [
-                        const Text('Items Total:', style: TextStyle(fontSize: 15)),
+                        const Text('Items Total:',
+                            style: TextStyle(fontSize: 15)),
                         const Spacer(),
                         Text(
                           'Rs.${_saleItems.fold(0.0, (sum, item) => sum + item.unitPrice * item.quantity).toStringAsFixed(2)}',
@@ -794,16 +1182,22 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                     if (_extraCharges.isNotEmpty) ...[
                       const Divider(height: 12),
                       ..._extraCharges.map((charge) {
-                        final label = charge['key']!.text.isEmpty ? 'Extra' : charge['key']!.text;
-                        final amount = double.tryParse(charge['value']!.text) ?? 0.0;
+                        final label = charge['key']!.text.isEmpty
+                            ? 'Extra'
+                            : charge['key']!.text;
+                        final amount =
+                            double.tryParse(charge['value']!.text) ?? 0.0;
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 4),
                           child: Row(
                             children: [
-                              Text(label, style: const TextStyle(fontSize: 14, color: Colors.grey)),
+                              Text(label,
+                                  style: const TextStyle(
+                                      fontSize: 14, color: Colors.grey)),
                               const Spacer(),
                               Text('Rs.${amount.toStringAsFixed(2)}',
-                                  style: const TextStyle(fontSize: 14, color: Colors.grey)),
+                                  style: const TextStyle(
+                                      fontSize: 14, color: Colors.grey)),
                             ],
                           ),
                         );
@@ -812,11 +1206,16 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                     const Divider(height: 12),
                     Row(
                       children: [
-                        const Text('Grand Total:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        const Text('Grand Total:',
+                            style: TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.bold)),
                         const Spacer(),
                         Text(
                           'Rs.${_calculateTotalAmount().toStringAsFixed(2)}',
-                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.indigo),
+                          style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.indigo),
                         ),
                       ],
                     ),
@@ -829,7 +1228,8 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
                 onPressed: _isSaving ? null : _completeSale,
                 icon: const Icon(Icons.check_circle),
                 label: Text(_isSaving ? 'Completing...' : 'Complete Sale'),
-                style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(45)),
+                style: ElevatedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(45)),
               ),
             ],
           ),

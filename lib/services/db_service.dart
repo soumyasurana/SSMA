@@ -81,7 +81,7 @@ class DBService {
     // ChangeLog is only used for backward compat and ordering is best-effort.
     final log = ChangeLog()
       ..opId = _uuid.v4()
-      ..changeSeq = DateTime.now().millisecondsSinceEpoch  // monotonic approx
+      ..changeSeq = DateTime.now().millisecondsSinceEpoch // monotonic approx
       ..collection = collection
       ..recordId = recordId
       ..operationType = operationType
@@ -118,6 +118,8 @@ class DBService {
     await flushPendingJournalEntries();
   }
 
+  static bool _isFlushingJournal = false;
+
   /// Flushes any buffered v2 journal entries once the sync engine is ready.
   ///
   /// This is safe to call repeatedly. Successfully flushed entries are removed
@@ -125,29 +127,32 @@ class DBService {
   static Future<void> flushPendingJournalEntries() async {
     if (_pendingJournalEntries.isEmpty) return;
     if (syncV2 == null) return;
+    if (_isFlushingJournal) return;
+    _isFlushingJournal = true;
 
-    final pending = List<_JournalEntry>.from(_pendingJournalEntries);
-    final remaining = <_JournalEntry>[];
-
-    for (final entry in pending) {
-      try {
-        await syncV2!.changeJournal.append(
-          entityType: entry.entityType,
-          entityId: entry.entityId,
-          operation: entry.operation,
-          entityVersion: entry.entityVersion,
-          payload: entry.payload,
-        );
-      } catch (e) {
-        debugPrint('[DBService]: ❌ Failed to flush journal entry for '
-            '${entry.entityType}/${entry.entityId}: $e');
-        remaining.add(entry);
+    try {
+      while (_pendingJournalEntries.isNotEmpty) {
+        final entry = _pendingJournalEntries.first;
+        try {
+          await syncV2!.changeJournal.append(
+            entityType: entry.entityType,
+            entityId: entry.entityId,
+            operation: entry.operation,
+            entityVersion: entry.entityVersion,
+            payload: entry.payload,
+          );
+          _pendingJournalEntries.removeAt(0);
+        } catch (e) {
+          debugPrint('[DBService]: ❌ Failed to flush journal entry for '
+              '${entry.entityType}/${entry.entityId}: $e');
+          _pendingJournalEntries.removeAt(0);
+          _pendingJournalEntries.add(entry);
+          break;
+        }
       }
+    } finally {
+      _isFlushingJournal = false;
     }
-
-    _pendingJournalEntries
-      ..clear()
-      ..addAll(remaining);
   }
 
   static Future<void> _putProductSafe(Product product) async {
@@ -343,7 +348,8 @@ class DBService {
       );
     });
     await _flushJournalEntries();
-    debugPrint('[SYNC_OP]: v2 CREATE journal entry for product uuid=${product.uuid}');
+    debugPrint(
+        '[SYNC_OP]: v2 CREATE journal entry for product uuid=${product.uuid}');
     syncV2?.triggerDebouncedSync();
   }
 
@@ -367,7 +373,8 @@ class DBService {
       );
     });
     await _flushJournalEntries();
-    debugPrint('[SYNC_OP]: v2 UPDATE journal entry for product uuid=${product.uuid}, version=${product.version}');
+    debugPrint(
+        '[SYNC_OP]: v2 UPDATE journal entry for product uuid=${product.uuid}, version=${product.version}');
     syncV2?.triggerDebouncedSync();
   }
 
@@ -375,6 +382,9 @@ class DBService {
     final product =
         await isar.products.filter().uuidEqualTo(productUuid).findFirst();
     if (product == null) {
+      return;
+    }
+    if (product.deleted) {
       return;
     }
 
@@ -394,31 +404,15 @@ class DBService {
       );
     });
     await _flushJournalEntries();
-    debugPrint('[SYNC_OP]: v2 DELETE (soft) journal entry for product uuid=$productUuid');
+    debugPrint(
+        '[SYNC_OP]: v2 DELETE (soft) journal entry for product uuid=$productUuid');
     syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> deleteProductByIsarId(int id) async {
-    await isar.writeTxn(() async {
-      final product = await isar.products.get(id);
-      if (product != null) {
-        product.deleted = true;
-        product.updatedAt = DateTime.now();
-        product.isSynced = false;
-        product.version += 1;
-        await _putProductSafe(product);
-        await _appendChangeLog(
-          collection: 'Product',
-          operationType: 'DELETE',
-          payload: product.toJson(),
-          recordId: product.isarId,
-          entityUuid: product.uuid,
-          entityVersion: product.version,
-        );
-      }
-    });
-    await _flushJournalEntries();
-    syncV2?.triggerDebouncedSync();
+    final product = await isar.products.get(id);
+    if (product == null || product.deleted) return;
+    await deleteProduct(product.uuid);
   }
 
   static Future<Product?> getProductById(int id) async {
@@ -518,7 +512,31 @@ class DBService {
       payment.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
     }
 
+    final customer = await isar.customers
+        .filter()
+        .uuidEqualTo(payment.customerUuid)
+        .findFirst();
+
+    if (customer != null) {
+      customer.pendingDues -= payment.amountReceived;
+      if (customer.pendingDues < 0) customer.pendingDues = 0;
+      customer.updatedAt = DateTime.now();
+      customer.isSynced = false;
+      customer.version += 1;
+    }
+
     await isar.writeTxn(() async {
+      if (customer != null) {
+        await isar.customers.put(customer);
+        await _appendChangeLog(
+          collection: 'Customer',
+          operationType: 'UPDATE',
+          payload: customer.toJson(),
+          recordId: customer.isarId,
+          entityUuid: customer.uuid,
+          entityVersion: customer.version,
+        );
+      }
       await isar.customerPayments.put(payment);
       await _appendChangeLog(
         collection: 'CustomerPayment',
@@ -537,6 +555,7 @@ class DBService {
     // Load entities BEFORE the write transaction (reads outside writeTxn are safe)
     final payment = await isar.customerPayments.get(paymentIsarId);
     if (payment == null) return;
+    if (payment.deleted) return;
     final customer = await isar.customers
         .filter()
         .uuidEqualTo(payment.customerUuid)
@@ -584,6 +603,8 @@ class DBService {
     return isar.customerPayments
         .filter()
         .customerUuidEqualTo(customerUuid)
+        .and()
+        .deletedEqualTo(false)
         .sortByDateDesc()
         .findAll();
   }
@@ -605,26 +626,42 @@ class DBService {
       oldSale = await isar.sales.get(sale.isarId);
     }
 
-    // Load products for old sale items (to restore stock)
-    final Map<String, Product> oldSaleProductsMap = {};
+    // Build one net stock delta per product. Editing a sale can include the
+    // same product in both old and new items, so loading two product snapshots
+    // and writing them independently can apply the wrong final quantity.
+    final productQuantityDeltas = <String, int>{};
     if (oldSale != null) {
       for (final item in oldSale.items) {
-        final p = await isar.products.filter().uuidEqualTo(item.productUuid).findFirst();
-        if (p != null) oldSaleProductsMap[item.productUuid] = p;
+        if (item.productUuid.isEmpty) continue;
+        productQuantityDeltas[item.productUuid] =
+            (productQuantityDeltas[item.productUuid] ?? 0) + item.quantity;
+      }
+    }
+    for (final item in sale.items) {
+      if (item.productUuid.isEmpty) continue;
+      productQuantityDeltas[item.productUuid] =
+          (productQuantityDeltas[item.productUuid] ?? 0) - item.quantity;
+    }
+
+    final saleProductsMap = <String, Product>{};
+    for (final entry in productQuantityDeltas.entries) {
+      if (entry.value == 0) continue;
+      final product =
+          await isar.products.filter().uuidEqualTo(entry.key).findFirst();
+      if (product != null) {
+        saleProductsMap[entry.key] = product;
       }
     }
 
     // Load customer for old credit sale (to restore dues)
     Customer? oldCustomer;
-    if (oldSale != null && oldSale.saleType == SaleType.credit && oldSale.customerUuid != null) {
-      oldCustomer = await isar.customers.filter().uuidEqualTo(oldSale.customerUuid!).findFirst();
-    }
-
-    // Load products for new sale items (to deduct stock)
-    final Map<String, Product> newSaleProductsMap = {};
-    for (final item in sale.items) {
-      final p = await isar.products.filter().uuidEqualTo(item.productUuid).findFirst();
-      if (p != null) newSaleProductsMap[item.productUuid] = p;
+    if (oldSale != null &&
+        oldSale.saleType == SaleType.credit &&
+        oldSale.customerUuid != null) {
+      oldCustomer = await isar.customers
+          .filter()
+          .uuidEqualTo(oldSale.customerUuid!)
+          .findFirst();
     }
 
     // Load customer for new credit sale (to add dues)
@@ -633,47 +670,41 @@ class DBService {
       if (oldCustomer != null && oldCustomer.uuid == sale.customerUuid) {
         newCustomer = oldCustomer;
       } else {
-        newCustomer = await isar.customers.filter().uuidEqualTo(sale.customerUuid!).findFirst();
+        newCustomer = await isar.customers
+            .filter()
+            .uuidEqualTo(sale.customerUuid!)
+            .findFirst();
       }
     }
 
     // ── Mutate all entities in memory ─────────────────────────────────────────
-    if (oldSale != null) {
-      // Restore stock for old sale items
-      for (final item in oldSale.items) {
-        final product = oldSaleProductsMap[item.productUuid];
-        if (product != null) {
-          product.quantity += item.quantity;
-          product.updatedAt = DateTime.now();
-          product.isSynced = false;
-          product.version += 1;
-        }
-      }
-      // Restore dues for old credit customer
-      if (oldSale.saleType == SaleType.credit && oldCustomer != null) {
-        oldCustomer.pendingDues -= (oldSale.totalAmount - oldSale.amountReceived);
-        if (oldCustomer.pendingDues < 0) oldCustomer.pendingDues = 0;
-        oldCustomer.updatedAt = DateTime.now();
-        oldCustomer.isSynced = false;
-        oldCustomer.version += 1;
-      }
-      // Soft-delete old sale
-      oldSale.deleted = true;
-      oldSale.updatedAt = DateTime.now();
-      oldSale.isSynced = false;
-      oldSale.version += 1;
-    }
-
-    // Deduct stock for new sale items
-    for (final item in sale.items) {
-      final product = newSaleProductsMap[item.productUuid];
+    for (final entry in productQuantityDeltas.entries) {
+      final product = saleProductsMap[entry.key];
       if (product != null) {
-        product.quantity -= item.quantity;
+        product.quantity += entry.value;
         if (product.quantity < 0) product.quantity = 0;
         product.updatedAt = DateTime.now();
         product.isSynced = false;
         product.version += 1;
       }
+    }
+
+    if (oldSale != null) {
+      // Restore dues for old credit customer
+      if (oldSale.saleType == SaleType.credit && oldCustomer != null) {
+        oldCustomer.pendingDues -=
+            (oldSale.totalAmount - oldSale.amountReceived);
+        if (oldCustomer.pendingDues < 0) oldCustomer.pendingDues = 0;
+        oldCustomer.updatedAt = DateTime.now();
+        oldCustomer.isSynced = false;
+        oldCustomer.version += 1;
+      }
+      sale.isarId = oldSale.isarId;
+      sale.uuid = oldSale.uuid;
+      sale.createdAt = oldSale.createdAt;
+      sale.version = oldSale.version + 1;
+    } else if (sale.version <= 0) {
+      sale.version = 1;
     }
 
     // Add dues for new credit customer
@@ -686,60 +717,58 @@ class DBService {
 
     sale.updatedAt = DateTime.now();
     sale.isSynced = false;
-    if (sale.version <= 0) sale.version = 1;
+    sale.deleted = false;
     if (sale.deviceId.trim().isEmpty || sale.deviceId == 'unknown') {
       sale.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
     }
 
     // ── Single write transaction — all puts, no reads ──────────────────────────
     await isar.writeTxn(() async {
+      for (final product in saleProductsMap.values) {
+        await _putProductSafe(product);
+        await _appendChangeLog(
+          collection: 'Product',
+          operationType: 'UPDATE',
+          payload: product.toJson(),
+          recordId: product.isarId,
+          entityUuid: product.uuid,
+          entityVersion: product.version,
+        );
+      }
       if (oldSale != null) {
-        for (final product in oldSaleProductsMap.values) {
-          await _putProductSafe(product);
-          await _appendChangeLog(
-            collection: 'Product', operationType: 'UPDATE',
-            payload: product.toJson(), recordId: product.isarId,
-            entityUuid: product.uuid, entityVersion: product.version,
-          );
-        }
         if (oldCustomer != null) {
           await isar.customers.put(oldCustomer);
           await _appendChangeLog(
-            collection: 'Customer', operationType: 'UPDATE',
-            payload: oldCustomer.toJson(), recordId: oldCustomer.isarId,
-            entityUuid: oldCustomer.uuid, entityVersion: oldCustomer.version,
+            collection: 'Customer',
+            operationType: 'UPDATE',
+            payload: oldCustomer.toJson(),
+            recordId: oldCustomer.isarId,
+            entityUuid: oldCustomer.uuid,
+            entityVersion: oldCustomer.version,
           );
         }
-        await isar.sales.put(oldSale);
-        await _appendChangeLog(
-          collection: 'Sale', operationType: 'DELETE',
-          payload: oldSale.toJson(), recordId: oldSale.isarId,
-          entityUuid: oldSale.uuid, entityVersion: oldSale.version,
-        );
       }
 
-      for (final product in newSaleProductsMap.values) {
-        await _putProductSafe(product);
-        await _appendChangeLog(
-          collection: 'Product', operationType: 'UPDATE',
-          payload: product.toJson(), recordId: product.isarId,
-          entityUuid: product.uuid, entityVersion: product.version,
-        );
-      }
       if (newCustomer != null && newCustomer != oldCustomer) {
         await isar.customers.put(newCustomer);
         await _appendChangeLog(
-          collection: 'Customer', operationType: 'UPDATE',
-          payload: newCustomer.toJson(), recordId: newCustomer.isarId,
-          entityUuid: newCustomer.uuid, entityVersion: newCustomer.version,
+          collection: 'Customer',
+          operationType: 'UPDATE',
+          payload: newCustomer.toJson(),
+          recordId: newCustomer.isarId,
+          entityUuid: newCustomer.uuid,
+          entityVersion: newCustomer.version,
         );
       }
 
       await isar.sales.put(sale);
       await _appendChangeLog(
-        collection: 'Sale', operationType: 'CREATE',
-        payload: sale.toJson(), recordId: sale.isarId,
-        entityUuid: sale.uuid, entityVersion: sale.version,
+        collection: 'Sale',
+        operationType: oldSale == null ? 'CREATE' : 'UPDATE',
+        payload: sale.toJson(),
+        recordId: sale.isarId,
+        entityUuid: sale.uuid,
+        entityVersion: sale.version,
       );
     });
     await _flushJournalEntries();
@@ -776,27 +805,35 @@ class DBService {
     // Pre-load entities BEFORE write transaction
     final sale = await isar.sales.get(id);
     if (sale == null) return;
+    if (sale.deleted) return;
 
-    final Map<String, Product> productsMap = {};
+    final productQuantityDeltas = <String, int>{};
     for (final item in sale.items) {
-      final p = await isar.products.filter().uuidEqualTo(item.productUuid).findFirst();
-      if (p != null) productsMap[item.productUuid] = p;
+      if (item.productUuid.isEmpty) continue;
+      productQuantityDeltas[item.productUuid] =
+          (productQuantityDeltas[item.productUuid] ?? 0) + item.quantity;
+    }
+
+    final productsMap = <String, Product>{};
+    for (final entry in productQuantityDeltas.entries) {
+      if (entry.value == 0) continue;
+      final product =
+          await isar.products.filter().uuidEqualTo(entry.key).findFirst();
+      if (product != null) {
+        product.quantity += entry.value;
+        product.updatedAt = DateTime.now();
+        product.isSynced = false;
+        product.version += 1;
+        productsMap[entry.key] = product;
+      }
     }
 
     Customer? customer;
     if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
-      customer = await isar.customers.filter().uuidEqualTo(sale.customerUuid!).findFirst();
-    }
-
-    // Mutate in memory
-    for (final item in sale.items) {
-      final p = productsMap[item.productUuid];
-      if (p != null) {
-        p.quantity += item.quantity;
-        p.updatedAt = DateTime.now();
-        p.isSynced = false;
-        p.version += 1;
-      }
+      customer = await isar.customers
+          .filter()
+          .uuidEqualTo(sale.customerUuid!)
+          .findFirst();
     }
     if (customer != null) {
       customer.pendingDues -= (sale.totalAmount - sale.amountReceived);
@@ -814,24 +851,33 @@ class DBService {
       for (final product in productsMap.values) {
         await _putProductSafe(product);
         await _appendChangeLog(
-          collection: 'Product', operationType: 'UPDATE',
-          payload: product.toJson(), recordId: product.isarId,
-          entityUuid: product.uuid, entityVersion: product.version,
+          collection: 'Product',
+          operationType: 'UPDATE',
+          payload: product.toJson(),
+          recordId: product.isarId,
+          entityUuid: product.uuid,
+          entityVersion: product.version,
         );
       }
       if (customer != null) {
         await isar.customers.put(customer);
         await _appendChangeLog(
-          collection: 'Customer', operationType: 'UPDATE',
-          payload: customer.toJson(), recordId: customer.isarId,
-          entityUuid: customer.uuid, entityVersion: customer.version,
+          collection: 'Customer',
+          operationType: 'UPDATE',
+          payload: customer.toJson(),
+          recordId: customer.isarId,
+          entityUuid: customer.uuid,
+          entityVersion: customer.version,
         );
       }
       await isar.sales.put(sale);
       await _appendChangeLog(
-        collection: 'Sale', operationType: 'DELETE',
-        payload: sale.toJson(), recordId: sale.isarId,
-        entityUuid: sale.uuid, entityVersion: sale.version,
+        collection: 'Sale',
+        operationType: 'DELETE',
+        payload: sale.toJson(),
+        recordId: sale.isarId,
+        entityUuid: sale.uuid,
+        entityVersion: sale.version,
       );
     });
     await _flushJournalEntries();
@@ -839,22 +885,29 @@ class DBService {
   }
 
   static Future<List<Sale>> getAllSales() async {
-    return isar.sales.where().sortByDateDesc().findAll();
+    return isar.sales.filter().deletedEqualTo(false).sortByDateDesc().findAll();
   }
 
   static Future<void> deleteSaleAndRestoreStock(String saleUuid) async {
     // Pre-load entities BEFORE write transaction
     final sale = await isar.sales.filter().uuidEqualTo(saleUuid).findFirst();
     if (sale == null) return;
+    if (sale.deleted) return;
 
     final Map<String, Product> productsMap = {};
     for (final item in sale.items) {
-      final p = await isar.products.filter().uuidEqualTo(item.productUuid).findFirst();
+      final p = await isar.products
+          .filter()
+          .uuidEqualTo(item.productUuid)
+          .findFirst();
       if (p != null) productsMap[item.productUuid] = p;
     }
     Customer? customer;
     if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
-      customer = await isar.customers.filter().uuidEqualTo(sale.customerUuid!).findFirst();
+      customer = await isar.customers
+          .filter()
+          .uuidEqualTo(sale.customerUuid!)
+          .findFirst();
     }
 
     // Mutate in memory
@@ -883,24 +936,33 @@ class DBService {
       for (final product in productsMap.values) {
         await _putProductSafe(product);
         await _appendChangeLog(
-          collection: 'Product', operationType: 'UPDATE',
-          payload: product.toJson(), recordId: product.isarId,
-          entityUuid: product.uuid, entityVersion: product.version,
+          collection: 'Product',
+          operationType: 'UPDATE',
+          payload: product.toJson(),
+          recordId: product.isarId,
+          entityUuid: product.uuid,
+          entityVersion: product.version,
         );
       }
       if (customer != null) {
         await isar.customers.put(customer);
         await _appendChangeLog(
-          collection: 'Customer', operationType: 'UPDATE',
-          payload: customer.toJson(), recordId: customer.isarId,
-          entityUuid: customer.uuid, entityVersion: customer.version,
+          collection: 'Customer',
+          operationType: 'UPDATE',
+          payload: customer.toJson(),
+          recordId: customer.isarId,
+          entityUuid: customer.uuid,
+          entityVersion: customer.version,
         );
       }
       await isar.sales.put(sale);
       await _appendChangeLog(
-        collection: 'Sale', operationType: 'DELETE',
-        payload: sale.toJson(), recordId: sale.isarId,
-        entityUuid: sale.uuid, entityVersion: sale.version,
+        collection: 'Sale',
+        operationType: 'DELETE',
+        payload: sale.toJson(),
+        recordId: sale.isarId,
+        entityUuid: sale.uuid,
+        entityVersion: sale.version,
       );
     });
     await _flushJournalEntries();
@@ -934,7 +996,10 @@ class DBService {
 
     Customer? customer;
     if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
-      customer = await isar.customers.filter().uuidEqualTo(sale.customerUuid!).findFirst();
+      customer = await isar.customers
+          .filter()
+          .uuidEqualTo(sale.customerUuid!)
+          .findFirst();
       if (customer != null) {
         customer.pendingDues -= delta;
         if (customer.pendingDues < 0) customer.pendingDues = 0;
@@ -947,16 +1012,22 @@ class DBService {
     await isar.writeTxn(() async {
       await isar.sales.put(sale!);
       await _appendChangeLog(
-        collection: 'Sale', operationType: 'UPDATE',
-        payload: sale.toJson(), recordId: sale.isarId,
-        entityUuid: sale.uuid, entityVersion: sale.version,
+        collection: 'Sale',
+        operationType: 'UPDATE',
+        payload: sale.toJson(),
+        recordId: sale.isarId,
+        entityUuid: sale.uuid,
+        entityVersion: sale.version,
       );
       if (customer != null) {
         await isar.customers.put(customer);
         await _appendChangeLog(
-          collection: 'Customer', operationType: 'UPDATE',
-          payload: customer.toJson(), recordId: customer.isarId,
-          entityUuid: customer.uuid, entityVersion: customer.version,
+          collection: 'Customer',
+          operationType: 'UPDATE',
+          payload: customer.toJson(),
+          recordId: customer.isarId,
+          entityUuid: customer.uuid,
+          entityVersion: customer.version,
         );
       }
     });
@@ -984,9 +1055,12 @@ class DBService {
     await isar.writeTxn(() async {
       await isar.customers.put(customer);
       await _appendChangeLog(
-        collection: 'Customer', operationType: 'UPDATE',
-        payload: customer.toJson(), recordId: customer.isarId,
-        entityUuid: customer.uuid, entityVersion: customer.version,
+        collection: 'Customer',
+        operationType: 'UPDATE',
+        payload: customer.toJson(),
+        recordId: customer.isarId,
+        entityUuid: customer.uuid,
+        entityVersion: customer.version,
       );
     });
     await _flushJournalEntries();
@@ -1007,9 +1081,12 @@ class DBService {
     await isar.writeTxn(() async {
       await isar.customers.put(customer);
       await _appendChangeLog(
-        collection: 'Customer', operationType: 'UPDATE',
-        payload: customer.toJson(), recordId: customer.isarId,
-        entityUuid: customer.uuid, entityVersion: customer.version,
+        collection: 'Customer',
+        operationType: 'UPDATE',
+        payload: customer.toJson(),
+        recordId: customer.isarId,
+        entityUuid: customer.uuid,
+        entityVersion: customer.version,
       );
     });
     await _flushJournalEntries();
@@ -1029,9 +1106,12 @@ class DBService {
     await isar.writeTxn(() async {
       await isar.suppliers.put(supplier);
       await _appendChangeLog(
-        collection: 'Supplier', operationType: 'CREATE',
-        payload: supplier.toJson(), recordId: supplier.isarId,
-        entityUuid: supplier.uuid, entityVersion: supplier.version,
+        collection: 'Supplier',
+        operationType: 'CREATE',
+        payload: supplier.toJson(),
+        recordId: supplier.isarId,
+        entityUuid: supplier.uuid,
+        entityVersion: supplier.version,
       );
     });
     await _flushJournalEntries();
@@ -1048,9 +1128,12 @@ class DBService {
     await isar.writeTxn(() async {
       await isar.suppliers.put(supplier);
       await _appendChangeLog(
-        collection: 'Supplier', operationType: 'UPDATE',
-        payload: supplier.toJson(), recordId: supplier.isarId,
-        entityUuid: supplier.uuid, entityVersion: supplier.version,
+        collection: 'Supplier',
+        operationType: 'UPDATE',
+        payload: supplier.toJson(),
+        recordId: supplier.isarId,
+        entityUuid: supplier.uuid,
+        entityVersion: supplier.version,
       );
     });
     await _flushJournalEntries();
@@ -1068,9 +1151,12 @@ class DBService {
     await isar.writeTxn(() async {
       await isar.suppliers.put(supplier);
       await _appendChangeLog(
-        collection: 'Supplier', operationType: 'DELETE',
-        payload: supplier.toJson(), recordId: supplier.isarId,
-        entityUuid: supplier.uuid, entityVersion: supplier.version,
+        collection: 'Supplier',
+        operationType: 'DELETE',
+        payload: supplier.toJson(),
+        recordId: supplier.isarId,
+        entityUuid: supplier.uuid,
+        entityVersion: supplier.version,
       );
     });
     await _flushJournalEntries();
@@ -1087,9 +1173,12 @@ class DBService {
     await isar.writeTxn(() async {
       await isar.suppliers.put(supplier);
       await _appendChangeLog(
-        collection: 'Supplier', operationType: 'DELETE',
-        payload: supplier.toJson(), recordId: supplier.isarId,
-        entityUuid: supplier.uuid, entityVersion: supplier.version,
+        collection: 'Supplier',
+        operationType: 'DELETE',
+        payload: supplier.toJson(),
+        recordId: supplier.isarId,
+        entityUuid: supplier.uuid,
+        entityVersion: supplier.version,
       );
     });
     await _flushJournalEntries();
@@ -1119,32 +1208,46 @@ class DBService {
       purchase.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
     }
 
-    // Pre-load products BEFORE write transaction
-    final Map<String, Product> productsMap = {};
+    final productQuantityDeltas = <String, int>{};
     for (final item in purchase.items) {
-      final p = await isar.products.filter().uuidEqualTo(item.productUuid).findFirst();
-      if (p != null) {
-        p.quantity += item.quantity;
-        p.updatedAt = DateTime.now();
-        p.isSynced = false;
-        p.version += 1;
-        productsMap[item.productUuid] = p;
+      if (item.productUuid.isEmpty) continue;
+      productQuantityDeltas[item.productUuid] =
+          (productQuantityDeltas[item.productUuid] ?? 0) + item.quantity;
+    }
+
+    final productsMap = <String, Product>{};
+    for (final entry in productQuantityDeltas.entries) {
+      if (entry.value == 0) continue;
+      final product =
+          await isar.products.filter().uuidEqualTo(entry.key).findFirst();
+      if (product != null) {
+        product.quantity += entry.value;
+        product.updatedAt = DateTime.now();
+        product.isSynced = false;
+        product.version += 1;
+        productsMap[entry.key] = product;
       }
     }
 
     await isar.writeTxn(() async {
       await isar.purchases.put(purchase);
       await _appendChangeLog(
-        collection: 'Purchase', operationType: 'CREATE',
-        payload: purchase.toJson(), recordId: purchase.isarId,
-        entityUuid: purchase.uuid, entityVersion: purchase.version,
+        collection: 'Purchase',
+        operationType: 'CREATE',
+        payload: purchase.toJson(),
+        recordId: purchase.isarId,
+        entityUuid: purchase.uuid,
+        entityVersion: purchase.version,
       );
       for (final product in productsMap.values) {
         await _putProductSafe(product);
         await _appendChangeLog(
-          collection: 'Product', operationType: 'UPDATE',
-          payload: product.toJson(), recordId: product.isarId,
-          entityUuid: product.uuid, entityVersion: product.version,
+          collection: 'Product',
+          operationType: 'UPDATE',
+          payload: product.toJson(),
+          recordId: product.isarId,
+          entityUuid: product.uuid,
+          entityVersion: product.version,
         );
       }
     });
@@ -1153,18 +1256,64 @@ class DBService {
   }
 
   static Future<void> updatePurchase(Purchase purchase) async {
+    final oldPurchase = await isar.purchases.get(purchase.isarId);
+    final productQuantityDeltas = <String, int>{};
+
+    if (oldPurchase != null) {
+      for (final item in oldPurchase.items) {
+        if (item.productUuid.isEmpty) continue;
+        productQuantityDeltas[item.productUuid] =
+            (productQuantityDeltas[item.productUuid] ?? 0) - item.quantity;
+      }
+    }
+    for (final item in purchase.items) {
+      if (item.productUuid.isEmpty) continue;
+      productQuantityDeltas[item.productUuid] =
+          (productQuantityDeltas[item.productUuid] ?? 0) + item.quantity;
+    }
+
+    final productsMap = <String, Product>{};
+    for (final entry in productQuantityDeltas.entries) {
+      if (entry.value == 0) continue;
+      final product =
+          await isar.products.filter().uuidEqualTo(entry.key).findFirst();
+      if (product != null) {
+        product.quantity += entry.value;
+        if (product.quantity < 0) product.quantity = 0;
+        product.updatedAt = DateTime.now();
+        product.isSynced = false;
+        product.version += 1;
+        productsMap[entry.key] = product;
+      }
+    }
+
     purchase.updatedAt = DateTime.now();
     purchase.isSynced = false;
-    purchase.version += 1;
+    purchase.version = (oldPurchase?.version ?? 0) + 1;
     if (purchase.deviceId.trim().isEmpty || purchase.deviceId == 'unknown') {
       purchase.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
     }
+
     await isar.writeTxn(() async {
+      for (final product in productsMap.values) {
+        await _putProductSafe(product);
+        await _appendChangeLog(
+          collection: 'Product',
+          operationType: 'UPDATE',
+          payload: product.toJson(),
+          recordId: product.isarId,
+          entityUuid: product.uuid,
+          entityVersion: product.version,
+        );
+      }
       await isar.purchases.put(purchase);
       await _appendChangeLog(
-        collection: 'Purchase', operationType: 'UPDATE',
-        payload: purchase.toJson(), recordId: purchase.isarId,
-        entityUuid: purchase.uuid, entityVersion: purchase.version,
+        collection: 'Purchase',
+        operationType: 'UPDATE',
+        payload: purchase.toJson(),
+        recordId: purchase.isarId,
+        entityUuid: purchase.uuid,
+        entityVersion: purchase.version,
       );
     });
     await _flushJournalEntries();
@@ -1173,17 +1322,55 @@ class DBService {
 
   static Future<void> deletePurchase(int id) async {
     final purchase = await isar.purchases.get(id);
-    if (purchase == null) return;
+    if (purchase == null || purchase.deleted) return;
+
+    final productQuantityDeltas = <String, int>{};
+    for (final item in purchase.items) {
+      if (item.productUuid.isEmpty) continue;
+      productQuantityDeltas[item.productUuid] =
+          (productQuantityDeltas[item.productUuid] ?? 0) - item.quantity;
+    }
+
+    final productsMap = <String, Product>{};
+    for (final entry in productQuantityDeltas.entries) {
+      if (entry.value == 0) continue;
+      final product =
+          await isar.products.filter().uuidEqualTo(entry.key).findFirst();
+      if (product != null) {
+        product.quantity += entry.value;
+        if (product.quantity < 0) product.quantity = 0;
+        product.updatedAt = DateTime.now();
+        product.isSynced = false;
+        product.version += 1;
+        productsMap[entry.key] = product;
+      }
+    }
+
     purchase.deleted = true;
     purchase.updatedAt = DateTime.now();
     purchase.isSynced = false;
     purchase.version += 1;
+
     await isar.writeTxn(() async {
+      for (final product in productsMap.values) {
+        await _putProductSafe(product);
+        await _appendChangeLog(
+          collection: 'Product',
+          operationType: 'UPDATE',
+          payload: product.toJson(),
+          recordId: product.isarId,
+          entityUuid: product.uuid,
+          entityVersion: product.version,
+        );
+      }
       await isar.purchases.put(purchase);
       await _appendChangeLog(
-        collection: 'Purchase', operationType: 'DELETE',
-        payload: purchase.toJson(), recordId: purchase.isarId,
-        entityUuid: purchase.uuid, entityVersion: purchase.version,
+        collection: 'Purchase',
+        operationType: 'DELETE',
+        payload: purchase.toJson(),
+        recordId: purchase.isarId,
+        entityUuid: purchase.uuid,
+        entityVersion: purchase.version,
       );
     });
     await _flushJournalEntries();
@@ -1191,7 +1378,11 @@ class DBService {
   }
 
   static Future<List<Purchase>> getAllPurchases() async {
-    return isar.purchases.where().sortByDateDesc().findAll();
+    return isar.purchases
+        .filter()
+        .deletedEqualTo(false)
+        .sortByDateDesc()
+        .findAll();
   }
 
   static Future<List<Purchase>> getPurchasesBySupplier(
@@ -1199,6 +1390,8 @@ class DBService {
     return isar.purchases
         .filter()
         .supplierUuidEqualTo(supplierUuid)
+        .and()
+        .deletedEqualTo(false)
         .sortByDateDesc()
         .findAll();
   }
@@ -1212,12 +1405,40 @@ class DBService {
     if (payment.deviceId.trim().isEmpty || payment.deviceId == 'unknown') {
       payment.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
     }
+
     await isar.writeTxn(() async {
       await isar.supplierPayments.put(payment);
       await _appendChangeLog(
-        collection: 'SupplierPayment', operationType: 'CREATE',
-        payload: payment.toJson(), recordId: payment.isarId,
-        entityUuid: payment.uuid, entityVersion: payment.version,
+        collection: 'SupplierPayment',
+        operationType: 'CREATE',
+        payload: payment.toJson(),
+        recordId: payment.isarId,
+        entityUuid: payment.uuid,
+        entityVersion: payment.version,
+      );
+    });
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
+  }
+
+  static Future<void> deleteSupplierPayment(int paymentIsarId) async {
+    final payment = await isar.supplierPayments.get(paymentIsarId);
+    if (payment == null || payment.deleted) return;
+
+    payment.deleted = true;
+    payment.updatedAt = DateTime.now();
+    payment.isSynced = false;
+    payment.version += 1;
+
+    await isar.writeTxn(() async {
+      await isar.supplierPayments.put(payment);
+      await _appendChangeLog(
+        collection: 'SupplierPayment',
+        operationType: 'DELETE',
+        payload: payment.toJson(),
+        recordId: payment.isarId,
+        entityUuid: payment.uuid,
+        entityVersion: payment.version,
       );
     });
     await _flushJournalEntries();
@@ -1229,12 +1450,18 @@ class DBService {
     return isar.supplierPayments
         .filter()
         .supplierUuidEqualTo(supplierUuid)
+        .and()
+        .deletedEqualTo(false)
         .sortByDateDesc()
         .findAll();
   }
 
   static Future<List<SupplierPayment>> getAllSupplierPayments() async {
-    return isar.supplierPayments.where().sortByDateDesc().findAll();
+    return isar.supplierPayments
+        .filter()
+        .deletedEqualTo(false)
+        .sortByDateDesc()
+        .findAll();
   }
 
   static Future<void> deleteInvalidSales() async {
@@ -1242,14 +1469,28 @@ class DBService {
     await isar.writeTxn(() async {
       for (final sale in sales) {
         if (!sale.totalAmount.isFinite || sale.totalAmount.isNaN) {
-          await isar.sales.delete(sale.isarId);
+          sale.deleted = true;
+          sale.updatedAt = DateTime.now();
+          sale.isSynced = false;
+          sale.version += 1;
+          await isar.sales.put(sale);
+          await _appendChangeLog(
+            collection: 'Sale',
+            operationType: 'DELETE',
+            payload: sale.toJson(),
+            recordId: sale.isarId,
+            entityUuid: sale.uuid,
+            entityVersion: sale.version,
+          );
         }
       }
     });
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<double> getTotalSales() async {
-    final sales = await isar.sales.where().findAll();
+    final sales = await getAllSales();
     double total = 0.0;
     for (final sale in sales) {
       if (sale.totalAmount.isFinite && !sale.totalAmount.isNaN) {
@@ -1268,10 +1509,21 @@ class DBService {
               (sale.saleType == SaleType.cash) ? sale.totalAmount : 0;
           sale.updatedAt = DateTime.now();
           sale.isSynced = false;
+          sale.version += 1;
           await isar.sales.put(sale);
+          await _appendChangeLog(
+            collection: 'Sale',
+            operationType: 'UPDATE',
+            payload: sale.toJson(),
+            recordId: sale.isarId,
+            entityUuid: sale.uuid,
+            entityVersion: sale.version,
+          );
         }
       }
     });
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
   }
 
   static Future<void> cleanupDuplicateAndStalePeers() async {

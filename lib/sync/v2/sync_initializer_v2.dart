@@ -44,7 +44,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
   late SyncManager syncManager;
   late LocalSyncServer syncServer;
   late DeviceDiscoveryService discoveryService;
-  late SyncStatusNotifierV2 statusNotifier;
+  final SyncStatusNotifierV2 statusNotifier = SyncStatusNotifierV2();
 
   // -------------------------------------------------------------------------
   // State
@@ -74,8 +74,6 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     final localPlatform = _detectPlatform();
 
     // 2. Core services
-    statusNotifier = SyncStatusNotifierV2();
-
     changeJournal = ChangeJournal(isar: isar, localDeviceId: _deviceId!);
     cursorManager = CursorManager(isar: isar);
     conflictResolver = ConflictResolver(); // defaults to HighestVersionWins

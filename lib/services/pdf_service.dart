@@ -11,6 +11,7 @@ import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/supplier.dart';
 import 'package:ssma/models/purchase.dart';
 import 'package:ssma/models/supplier_payment.dart';
+import 'package:ssma/utils/sale_metadata.dart';
 
 class PDFService {
   static bool generateFiles = true;
@@ -60,12 +61,13 @@ class PDFService {
     const primaryColor = PdfColor.fromInt(0xFF1565C0);
     const accentColor = PdfColor.fromInt(0xFFE3F2FD);
     const dividerColor = PdfColor.fromInt(0xFFBBDEFB);
+    final metadata = SaleMetadata.parse(sale.comment);
 
     // ── parse extra charges from comment ──────────────────────────────────
     final List<MapEntry<String, double>> extraCharges = [];
-    String? cleanComment = sale.comment;
-    if (sale.comment != null && sale.comment!.contains('Charges:')) {
-      final parts = sale.comment!.split(' | Charges: ');
+    String? cleanComment = metadata.visibleComment;
+    if (cleanComment != null && cleanComment.contains('Charges:')) {
+      final parts = cleanComment.split(' | Charges: ');
       cleanComment = parts[0].isEmpty ? null : parts[0];
       if (parts.length > 1) {
         for (final entry in parts[1].split(', ')) {
@@ -78,11 +80,11 @@ class PDFService {
       }
     }
     // also handle comment that starts directly with "Charges:"
-    if (sale.comment != null &&
-        sale.comment!.startsWith('Charges: ') &&
+    if (cleanComment != null &&
+        cleanComment.startsWith('Charges: ') &&
         extraCharges.isEmpty) {
+      final chargesStr = cleanComment.replaceFirst('Charges: ', '');
       cleanComment = null;
-      final chargesStr = sale.comment!.replaceFirst('Charges: ', '');
       for (final entry in chargesStr.split(', ')) {
         final kv = entry.split(': Rs.');
         if (kv.length == 2) {
@@ -250,112 +252,95 @@ class PDFService {
         // ── BODY ──────────────────────────────────────────────────────────
         build: (context) => [
           pw.TableHelper.fromTextArray(
-            headers: ['S.No', 'Product', 'Qty', 'Rate (Rs.)', 'Total (Rs.)'],
+            headers: ['#', 'Item', 'Qty', 'Rate (Rs.)', 'Amount (Rs.)'],
             data: tableData,
-            headerStyle: headerStyle,
-            cellStyle: cellStyle,
-            headerDecoration: const pw.BoxDecoration(color: primaryColor),
-            rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
-            oddRowDecoration: pw.BoxDecoration(color: accentColor.shade(0.4)),
             border: pw.TableBorder.all(color: dividerColor, width: 0.5),
-            cellPadding:
-                const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            cellAlignment: pw.Alignment.centerLeft,
-            columnWidths: {
-              0: const pw.FixedColumnWidth(36),
-              1: const pw.FlexColumnWidth(3.5),
-              2: const pw.FixedColumnWidth(36),
-              3: const pw.FlexColumnWidth(1.8),
-              4: const pw.FlexColumnWidth(1.8),
-            },
+            headerStyle: headerStyle,
+            headerDecoration: const pw.BoxDecoration(color: primaryColor),
+            cellStyle: cellStyle,
+            cellHeight: 24,
             cellAlignments: {
-              0: pw.Alignment.center,
-              2: pw.Alignment.center,
+              0: pw.Alignment.centerLeft,
+              1: pw.Alignment.centerLeft,
+              2: pw.Alignment.centerRight,
               3: pw.Alignment.centerRight,
               4: pw.Alignment.centerRight,
             },
           ),
+          pw.SizedBox(height: 12),
 
-          pw.SizedBox(height: 16),
-
-          // ── Totals block ──────────────────────────────────────────────
+          // Summary Section
           pw.Align(
             alignment: pw.Alignment.centerRight,
             child: pw.Container(
               width: 240,
               decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: dividerColor, width: 0.8),
-                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+                border: pw.TableBorder.all(color: dividerColor, width: 0.5),
+                borderRadius:
+                    const pw.BorderRadius.all(pw.Radius.circular(6)),
               ),
               child: pw.Column(
                 children: [
-                  // Items subtotal
                   pw.Container(
                     padding: const pw.EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
+                        horizontal: 12, vertical: 6),
                     child: pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
-                        pw.Text('Items Total:', style: labelStyle),
-                        pw.Text(
-                          'Rs. ${(sale.totalAmount - extraCharges.fold(0.0, (s, e) => s + e.value)).toStringAsFixed(2)}',
-                          style: valueStyle,
-                        ),
+                        pw.Text('Items Subtotal:', style: labelStyle),
+                        pw.Text('Rs. ${sale.totalAmount.toStringAsFixed(2)}',
+                            style: valueStyle),
                       ],
                     ),
                   ),
 
-                  // Extra charge rows
-                  ...extraCharges.map((e) => pw.Column(
-                        children: [
-                          pw.Container(height: 0.5, color: dividerColor),
-                          pw.Container(
-                            padding: const pw.EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 8),
-                            child: pw.Row(
-                              mainAxisAlignment:
-                                  pw.MainAxisAlignment.spaceBetween,
-                              children: [
-                                pw.Text(e.key, style: labelStyle),
-                                pw.Text('Rs. ${e.value.toStringAsFixed(2)}',
-                                    style: valueStyle),
-                              ],
-                            ),
-                          ),
-                        ],
-                      )),
+                  // Extra Charges breakdown
+                  if (extraCharges.isNotEmpty) ...[
+                    pw.Container(height: 0.5, color: dividerColor),
+                    ...extraCharges.map(
+                      (charge) => pw.Container(
+                        padding: const pw.EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 4),
+                        child: pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text('+ ${charge.key}:', style: labelStyle),
+                            pw.Text('Rs. ${charge.value.toStringAsFixed(2)}',
+                                style: valueStyle),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
 
-                  // Previous Outstanding (credit only)
-                  if (sale.saleType == SaleType.credit &&
-                      previousBalance > 0) ...[
+                  if (previousBalance > 0) ...[
                     pw.Container(height: 0.5, color: dividerColor),
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                          horizontal: 12, vertical: 6),
                       child: pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
-                          pw.Text('Previous Outstanding:', style: labelStyle),
+                          pw.Text('Previous Due:', style: labelStyle),
                           pw.Text('Rs. ${previousBalance.toStringAsFixed(2)}',
                               style: pw.TextStyle(
                                   font: boldFont,
-                                  fontSize: 12,
-                                  color: PdfColors.red)),
+                                  fontSize: 11,
+                                  color: PdfColors.red800)),
                         ],
                       ),
                     ),
                   ],
 
-                  // Amount Received
                   if (sale.amountReceived > 0) ...[
                     pw.Container(height: 0.5, color: dividerColor),
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                          horizontal: 12, vertical: 6),
                       child: pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
-                          pw.Text('Amount Received:', style: labelStyle),
+                          pw.Text('Amount Paid:', style: labelStyle),
                           pw.Text(
                               'Rs. ${sale.amountReceived.toStringAsFixed(2)}',
                               style: pw.TextStyle(
@@ -363,6 +348,27 @@ class PDFService {
                                   fontSize: 12,
                                   color: PdfColors.green800)),
                         ],
+                      ),
+                    ),
+                  ],
+
+                  if (metadata.payments.isNotEmpty) ...[
+                    pw.Container(height: 0.5, color: dividerColor),
+                    ...metadata.payments.map(
+                      (payment) => pw.Container(
+                        padding: const pw.EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        child: pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text(payment.method, style: labelStyle),
+                            pw.Text('Rs. ${payment.amount.toStringAsFixed(2)}',
+                                style: pw.TextStyle(
+                                    font: boldFont,
+                                    fontSize: 11,
+                                    color: PdfColors.green800)),
+                          ],
+                        ),
                       ),
                     ),
                   ],
@@ -409,49 +415,34 @@ class PDFService {
           pw.SizedBox(height: 16),
 
           // ── Comment (clean, without charges string) ───────────────────
-          if (cleanComment != null && cleanComment.isNotEmpty)
+          if (cleanComment != null && cleanComment.isNotEmpty) ...[
             pw.Container(
-              padding:
-                  const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(8),
               decoration: pw.BoxDecoration(
                 color: accentColor,
-                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
-                border: pw.Border.all(color: dividerColor, width: 0.5),
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
               ),
-              child: pw.Row(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text('Note: ',
-                      style: pw.TextStyle(font: boldFont, fontSize: 12)),
-                  pw.Expanded(
-                    child: pw.Text(
-                      cleanComment,
-                      style: pw.TextStyle(
-                          font: font,
-                          fontSize: 12,
-                          fontStyle: pw.FontStyle.italic),
-                    ),
-                  ),
-                ],
-              ),
+              child: pw.Text('Notes: $cleanComment',
+                  style: pw.TextStyle(
+                      font: font, fontSize: 10, color: PdfColors.grey800)),
             ),
+            pw.SizedBox(height: 12),
+          ],
 
-          pw.SizedBox(height: 32),
+          pw.Spacer(),
 
-          // ── Signature ─────────────────────────────────────────────────
-          pw.Align(
-            alignment: pw.Alignment.centerRight,
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.center,
-              children: [
-                pw.SizedBox(height: 36),
-                pw.Container(width: 140, height: 0.8, color: PdfColors.grey600),
-                pw.SizedBox(height: 4),
-                pw.Text('Authorized Signature',
-                    style: pw.TextStyle(
-                        font: font, fontSize: 11, color: PdfColors.grey700)),
-              ],
-            ),
+          // Footer
+          pw.Divider(color: dividerColor),
+          pw.SizedBox(height: 4),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text('Thank you for your business!',
+                  style: pw.TextStyle(
+                      font: boldFont, fontSize: 10, color: primaryColor)),
+              pw.Text('Page 1 of 1', style: labelStyle),
+            ],
           ),
         ],
       ),
@@ -459,7 +450,7 @@ class PDFService {
 
     final dir = await getApplicationDocumentsDirectory();
     final file =
-        File('${dir.path}/Invoice_${sale.date.millisecondsSinceEpoch}.pdf');
+        File('${dir.path}/Invoice_${sale.isarId}_${sale.uuid.substring(0, 6)}.pdf');
     await file.writeAsBytes(await pdf.save());
     if (openGeneratedFiles) {
       await OpenFilex.open(file.path);
@@ -477,24 +468,30 @@ class PDFService {
     required DateTime endDate,
   }) async {
     final pdf = pw.Document();
-    final font =
-        pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Regular.ttf"));
-    final boldFont =
-        pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
+    pw.Font font;
+    pw.Font boldFont;
+    try {
+      font = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Regular.ttf"));
+      boldFont = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
+    } catch (_) {
+      font = pw.Font.helvetica();
+      boldFont = pw.Font.helveticaBold();
+    }
     final formatter = DateFormat('dd MMM yyyy');
+
+    final normalizedStart = DateTime(startDate.year, startDate.month, startDate.day);
+    final normalizedEnd = DateTime(endDate.year, endDate.month, endDate.day, 23, 59, 59, 999);
 
     double totalPurchase = 0;
     double totalPayment = 0;
 
     for (final p in purchases) {
-      if (p.date.isAfter(startDate.subtract(const Duration(days: 1))) &&
-          p.date.isBefore(endDate.add(const Duration(days: 1)))) {
+      if (!p.date.isBefore(normalizedStart) && !p.date.isAfter(normalizedEnd)) {
         totalPurchase += p.totalAmount;
       }
     }
     for (final pay in payments) {
-      if (pay.date.isAfter(startDate.subtract(const Duration(days: 1))) &&
-          pay.date.isBefore(endDate.add(const Duration(days: 1)))) {
+      if (!pay.date.isBefore(normalizedStart) && !pay.date.isAfter(normalizedEnd)) {
         totalPayment += pay.amount;
       }
     }
@@ -530,9 +527,8 @@ class PDFService {
             pw.Column(
               children: purchases
                   .where((p) =>
-                      p.date.isAfter(
-                          startDate.subtract(const Duration(days: 1))) &&
-                      p.date.isBefore(endDate.add(const Duration(days: 1))))
+                      !p.date.isBefore(normalizedStart) &&
+                      !p.date.isAfter(normalizedEnd))
                   .map((purchase) {
                 return pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -564,9 +560,8 @@ class PDFService {
             pw.Column(
               children: payments
                   .where((p) =>
-                      p.date.isAfter(
-                          startDate.subtract(const Duration(days: 1))) &&
-                      p.date.isBefore(endDate.add(const Duration(days: 1))))
+                      !p.date.isBefore(normalizedStart) &&
+                      !p.date.isAfter(normalizedEnd))
                   .map((payment) {
                 return pw.Text(
                   '• ${formatter.format(payment.date)} - ${payment.amount.toStringAsFixed(2)} (${payment.note ?? "No note"})',

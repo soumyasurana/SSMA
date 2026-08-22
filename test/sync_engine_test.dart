@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ssma/sync/v2/models/sync_change_log.dart';
 import 'package:ssma/sync/v2/services/sync_manager.dart';
+import 'package:ssma/sync/v2/sync_initializer_v2.dart';
 
 void main() {
   group('Sync v2 protocol models and status', () {
@@ -25,6 +26,14 @@ void main() {
       final notifier = SyncStatusNotifierV2();
       notifier.setStatus(SyncStatusV2.idle);
       expect(notifier.status, SyncStatusV2.idle);
+    });
+
+    test('sync status notifier is available before async initialization', () {
+      final initializer = SyncInitializerV2();
+      syncV2 = initializer;
+      addTearDown(() => syncV2 = null);
+
+      expect(syncV2!.statusNotifier.status, SyncStatusV2.idle);
     });
   });
 }
