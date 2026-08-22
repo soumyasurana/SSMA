@@ -101,9 +101,11 @@ class RecentTransactionsSection extends StatelessWidget {
         }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cannot open transaction detail: $e')),
-      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cannot open transaction detail: $e')),
+        );
+      }
     }
   }
 

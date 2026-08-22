@@ -4,7 +4,7 @@ import 'package:ssma/sync/v2/services/sync_manager.dart' show SyncStatusV2;
 import 'package:ssma/screens/sync_settings_screen_v2.dart';
 
 class SyncIndicator extends StatelessWidget {
-  const SyncIndicator({Key? key}) : super(key: key);
+  const SyncIndicator({super.key});
 
   @override
   Widget build(BuildContext context) {

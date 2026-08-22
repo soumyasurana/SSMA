@@ -14,6 +14,8 @@ import 'package:ssma/models/supplier.dart';
 import 'package:ssma/models/purchase.dart';
 import 'package:ssma/models/supplier_payment.dart';
 import 'package:ssma/utils/sale_metadata.dart';
+import 'package:ssma/services/report_models.dart';
+import 'package:ssma/services/report_service.dart';
 
 class PDFService {
   static bool generateFiles = true;
@@ -1036,8 +1038,258 @@ class PDFService {
   }
 
   // =========================================================================
-  // generateReportPdf
   // =========================================================================
+  // generateExecutiveReportPdf (Executive Business Intelligence Report)
+  // =========================================================================
+  static Future<void> generateExecutiveReportPdf(BusinessReportData report) async {
+    if (!generateFiles) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final storeName = prefs.getString('ssma_store_name') ?? 'Surana Electronics';
+
+    final pdf = pw.Document();
+    pw.Font font;
+    pw.Font boldFont;
+    try {
+      font = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Regular.ttf"));
+      boldFont = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
+    } catch (_) {
+      font = pw.Font.helvetica();
+      boldFont = pw.Font.helveticaBold();
+    }
+
+    final dateFormatter = DateFormat('dd-MMM-yyyy');
+    final currencyFmt = NumberFormat('#,##,##0.00', 'en_IN');
+    String fmt(double val) => '₹${currencyFmt.format(val)}';
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(28),
+        build: (context) => [
+          // Header
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(storeName, style: pw.TextStyle(font: boldFont, fontSize: 18)),
+                  pw.SizedBox(height: 2),
+                  pw.Text('EXECUTIVE BUSINESS PERFORMANCE REPORT',
+                      style: pw.TextStyle(font: boldFont, fontSize: 11, color: PdfColors.grey700)),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text('Period: ${report.presetLabel}',
+                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                  pw.Text(
+                      '${dateFormatter.format(report.startDate)} to ${dateFormatter.format(report.endDate)}',
+                      style: pw.TextStyle(font: font, fontSize: 9, color: PdfColors.grey700)),
+                  pw.Text('Generated: ${DateFormat('dd-MMM-yyyy hh:mm a').format(DateTime.now())}',
+                      style: pw.TextStyle(font: font, fontSize: 8, color: PdfColors.grey600)),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 10),
+          pw.Divider(thickness: 1, color: PdfColors.grey400),
+          pw.SizedBox(height: 8),
+
+          // Executive Summary KPI Matrix
+          pw.Text('1. EXECUTIVE FINANCIAL SUMMARY',
+              style: pw.TextStyle(font: boldFont, fontSize: 11, color: PdfColors.indigo900)),
+          pw.SizedBox(height: 6),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            children: [
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+                children: [
+                  _pdfSummaryCell('Total Sales Turnover', fmt(report.grossSales), boldFont, font),
+                  _pdfSummaryCell('Cost of Goods (COGS)', fmt(report.cogs), boldFont, font),
+                  _pdfSummaryCell('Gross Profit', fmt(report.grossProfit), boldFont, font),
+                  _pdfSummaryCell('Profit Margin', '${report.profitMarginPercentage.toStringAsFixed(1)}%', boldFont, font),
+                ],
+              ),
+              pw.TableRow(
+                children: [
+                  _pdfSummaryCell('Total Orders', '${report.totalOrders} bills', boldFont, font),
+                  _pdfSummaryCell('Avg Order Value (AOV)', fmt(report.averageOrderValue), boldFont, font),
+                  _pdfSummaryCell('Items Sold', '${report.totalItemsSold} units', boldFont, font),
+                  _pdfSummaryCell('Net Cash Flow', fmt(report.netCashFlow), boldFont, font),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 14),
+
+          // Working Capital & Liquidity
+          pw.Text('2. WORKING CAPITAL & LIQUIDITY',
+              style: pw.TextStyle(font: boldFont, fontSize: 11, color: PdfColors.indigo900)),
+          pw.SizedBox(height: 6),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            children: [
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+                children: [
+                  _pdfSummaryCell('Total Receivables (Dues)', fmt(report.totalCustomerReceivables), boldFont, font),
+                  _pdfSummaryCell('Total Supplier Payables', fmt(report.totalSupplierPayables), boldFont, font),
+                  _pdfSummaryCell('Net Working Capital', fmt(report.netWorkingCapitalPosition), boldFont, font),
+                  _pdfSummaryCell('Cash Collections', fmt(report.totalCashInflow), boldFont, font),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 14),
+
+          // Inventory & Godown Valuation
+          pw.Text('3. INVENTORY & GODOWN VALUATION',
+              style: pw.TextStyle(font: boldFont, fontSize: 11, color: PdfColors.indigo900)),
+          pw.SizedBox(height: 6),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            children: [
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+                children: [
+                  _pdfSummaryCell('Shop Stock Valuation (Cost)', fmt(report.shopInventoryValuationAtCost), boldFont, font),
+                  _pdfSummaryCell('Shop Retail Value', fmt(report.shopInventoryValuationAtRetail), boldFont, font),
+                  _pdfSummaryCell('Potential Profit in Stock', fmt(report.potentialInventoryProfit), boldFont, font),
+                  _pdfSummaryCell('Godown Valuation', fmt(report.godownInventoryValuationAtCost), boldFont, font),
+                ],
+              ),
+              pw.TableRow(
+                children: [
+                  _pdfSummaryCell('Shop Units in Stock', '${report.totalShopStockUnits} units', boldFont, font),
+                  _pdfSummaryCell('Godown Units in Stock', '${report.totalGodownStockUnits} units', boldFont, font),
+                  _pdfSummaryCell('Low Stock Warnings', '${report.lowStockCount} items', boldFont, font),
+                  _pdfSummaryCell('Out of Stock', '${report.outOfStockCount} items', boldFont, font),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 14),
+
+          // Top Performing Products
+          if (report.topProductsByRevenue.isNotEmpty) ...[
+            pw.Text('4. TOP PERFORMING PRODUCTS',
+                style: pw.TextStyle(font: boldFont, fontSize: 11, color: PdfColors.indigo900)),
+            pw.SizedBox(height: 6),
+            pw.Table(
+              border: pw.TableBorder.all(color: PdfColors.grey300),
+              children: [
+                pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  children: [
+                    _pdfThCell('Product Name', boldFont),
+                    _pdfThCell('Qty Sold', boldFont, align: pw.TextAlign.right),
+                    _pdfThCell('Revenue', boldFont, align: pw.TextAlign.right),
+                    _pdfThCell('Profit', boldFont, align: pw.TextAlign.right),
+                    _pdfThCell('Margin %', boldFont, align: pw.TextAlign.right),
+                    _pdfThCell('Current Stock', boldFont, align: pw.TextAlign.right),
+                  ],
+                ),
+                ...report.topProductsByRevenue.take(10).map(
+                      (p) => pw.TableRow(
+                        children: [
+                          _pdfTdCell(p.productName, font),
+                          _pdfTdCell('${p.quantitySold}', font, align: pw.TextAlign.right),
+                          _pdfTdCell(fmt(p.revenue), font, align: pw.TextAlign.right),
+                          _pdfTdCell(fmt(p.profit), font, align: pw.TextAlign.right),
+                          _pdfTdCell('${p.marginPercentage.toStringAsFixed(1)}%', font, align: pw.TextAlign.right),
+                          _pdfTdCell('${p.currentStock}', font, align: pw.TextAlign.right),
+                        ],
+                      ),
+                    ),
+              ],
+            ),
+            pw.SizedBox(height: 14),
+          ],
+
+          // Payment Methods Mix
+          if (report.paymentMethods.isNotEmpty) ...[
+            pw.Text('5. PAYMENT METHOD DISTRIBUTION',
+                style: pw.TextStyle(font: boldFont, fontSize: 11, color: PdfColors.indigo900)),
+            pw.SizedBox(height: 6),
+            pw.Table(
+              border: pw.TableBorder.all(color: PdfColors.grey300),
+              children: [
+                pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  children: [
+                    _pdfThCell('Payment Method', boldFont),
+                    _pdfThCell('Collected Amount', boldFont, align: pw.TextAlign.right),
+                    _pdfThCell('Share (%)', boldFont, align: pw.TextAlign.right),
+                    _pdfThCell('Transactions', boldFont, align: pw.TextAlign.right),
+                  ],
+                ),
+                ...report.paymentMethods.map(
+                      (pm) => pw.TableRow(
+                        children: [
+                          _pdfTdCell(pm.method, font),
+                          _pdfTdCell(fmt(pm.amount), font, align: pw.TextAlign.right),
+                          _pdfTdCell('${pm.percentage.toStringAsFixed(1)}%', font, align: pw.TextAlign.right),
+                          _pdfTdCell('${pm.transactionCount}', font, align: pw.TextAlign.right),
+                        ],
+                      ),
+                    ),
+              ],
+            ),
+            pw.SizedBox(height: 14),
+          ],
+
+          // Footer note
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Text('Report generated by SSMA System. Confidential & Proprietary.',
+                style: pw.TextStyle(font: font, fontSize: 8, fontStyle: pw.FontStyle.italic, color: PdfColors.grey600)),
+          ),
+        ],
+      ),
+    );
+
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File(
+        '${dir.path}/Business_Report_${report.startDate.millisecondsSinceEpoch}_${report.endDate.millisecondsSinceEpoch}.pdf');
+    await file.writeAsBytes(await pdf.save());
+    if (openGeneratedFiles) {
+      await OpenFilex.open(file.path);
+    }
+  }
+
+  static pw.Widget _pdfSummaryCell(String title, String value, pw.Font boldFont, pw.Font font) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(6),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(title, style: pw.TextStyle(font: font, fontSize: 7, color: PdfColors.grey700)),
+          pw.SizedBox(height: 2),
+          pw.Text(value, style: pw.TextStyle(font: boldFont, fontSize: 9)),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _pdfThCell(String text, pw.Font boldFont, {pw.TextAlign align = pw.TextAlign.left}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: pw.Text(text, style: pw.TextStyle(font: boldFont, fontSize: 8), textAlign: align),
+    );
+  }
+
+  static pw.Widget _pdfTdCell(String text, pw.Font font, {pw.TextAlign align = pw.TextAlign.left}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: pw.Text(text, style: pw.TextStyle(font: font, fontSize: 8), textAlign: align),
+    );
+  }
+
   static Future<void> generateReportPdf({
     required List<Sale> sales,
     required List<Purchase> purchases,
@@ -1046,42 +1298,12 @@ class PDFService {
     required DateTime fromDate,
     required DateTime toDate,
   }) async {
-    final pdf = pw.Document();
-    final boldFont =
-        pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
-    final formatter = DateFormat('dd MMM yyyy');
-
-    pdf.addPage(
-      pw.MultiPage(
-        build: (context) => [
-          pw.Text('Business Report',
-              style: pw.TextStyle(font: boldFont, fontSize: 24)),
-          pw.SizedBox(height: 12),
-          pw.Text('From: ${formatter.format(fromDate)}'),
-          pw.Text('To: ${formatter.format(toDate)}'),
-          pw.SizedBox(height: 16),
-          pw.Text('Sales:', style: pw.TextStyle(font: boldFont)),
-          ...sales.map((s) => pw.Text(
-              '• ${s.buyerName ?? "Customer"} - ${s.totalAmount.toStringAsFixed(2)}')),
-          pw.SizedBox(height: 12),
-          pw.Text('Purchases:', style: pw.TextStyle(font: boldFont)),
-          ...purchases
-              .map((p) => pw.Text('• ${p.totalAmount.toStringAsFixed(2)}')),
-          pw.SizedBox(height: 12),
-          pw.Text('Supplier Payments:', style: pw.TextStyle(font: boldFont)),
-          ...payments.map((p) => pw.Text(
-              '• ${p.amount.toStringAsFixed(2)} - ${p.note ?? "No note"}')),
-        ],
-      ),
+    final report = await ReportService.generateReport(
+      startDate: fromDate,
+      endDate: toDate,
+      presetLabel: 'Custom Report',
     );
-
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File(
-        '${dir.path}/Business_Report_${fromDate.millisecondsSinceEpoch}_${toDate.millisecondsSinceEpoch}.pdf');
-    await file.writeAsBytes(await pdf.save());
-    if (openGeneratedFiles) {
-      await OpenFilex.open(file.path);
-    }
+    await generateExecutiveReportPdf(report);
   }
 
   // =========================================================================

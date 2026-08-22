@@ -197,7 +197,7 @@ class DeviceDiscoveryService {
 
       // Extract metadata from TXT records (NSD returns Uint8List? values — decode to String)
       final txt = resolved.txt ?? {};
-      String _decodeTxt(String key, String fallback) {
+      String decodeTxt(String key, String fallback) {
         final bytes = txt[key];
         if (bytes == null) return fallback;
         try {
@@ -207,10 +207,10 @@ class DeviceDiscoveryService {
         }
       }
 
-      final remoteDeviceId = _decodeTxt('deviceId', service.name ?? 'unknown');
-      final deviceName = _decodeTxt('deviceName', 'Unknown Device');
-      final platform = _decodeTxt('platform', 'unknown');
-      final appVersion = _decodeTxt('appVersion', '0.0.0');
+      final remoteDeviceId = decodeTxt('deviceId', service.name ?? 'unknown');
+      final deviceName = decodeTxt('deviceName', 'Unknown Device');
+      final platform = decodeTxt('platform', 'unknown');
+      final appVersion = decodeTxt('appVersion', '0.0.0');
 
       await deviceRegistry.upsertDevice(
         deviceId: remoteDeviceId,

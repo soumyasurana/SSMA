@@ -186,6 +186,12 @@ Future<void> _generateInvoice(Sale sale) async {
         const SnackBar(content: Text("Invoice generated")),
       );
     }
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error generating invoice: $e")),
+      );
+    }
   } finally {
     if (mounted) {
       setState(() => _pdfGeneratingSales.remove(sale.uuid));

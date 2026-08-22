@@ -1,35 +1,52 @@
+import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:isar/isar.dart';
-import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
-import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:ssma/models/godown_item.dart';
 import 'package:ssma/models/godown_movement.dart';
 import 'package:ssma/services/db_service.dart';
-
-class FakePathProvider extends Fake
-    with MockPlatformInterfaceMixin
-    implements PathProviderPlatform {
-  @override
-  Future<String?> getApplicationDocumentsPath() async {
-    return '.';
-  }
-}
+import 'package:ssma/sync/v2/services/change_processor.dart';
+import 'package:ssma/sync/v2/services/conflict_resolver.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  PathProviderPlatform.instance = FakePathProvider();
+
+  const pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
+  late Directory testDir;
 
   setUpAll(() async {
+    testDir = await Directory.systemTemp.createTemp('ssma_godown_unit_');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, (methodCall) async {
+      if (methodCall.method == 'getApplicationDocumentsDirectory') {
+        return testDir.path;
+      }
+      return null;
+    });
+
     await Isar.initializeIsarCore(download: true);
   });
 
   setUp(() async {
     try {
-      final isar = await DBService.getIsarInitialized();
-      await isar.writeTxn(() async {
-        await isar.clear();
-      });
+      await DBService.isar.close();
     } catch (_) {}
+    if (await testDir.exists()) {
+      await for (final entry in testDir.list()) {
+        await entry.delete(recursive: true);
+      }
+    }
+    final isar = await DBService.getIsarInitialized();
+    EntityRegistry.registerAll(isar: isar);
+  });
+
+  tearDownAll(() async {
+    try {
+      await DBService.isar.close();
+    } catch (_) {}
+    if (await testDir.exists()) {
+      await testDir.delete(recursive: true);
+    }
   });
 
   group('Godown Stock & Transfer Unit Tests', () {
@@ -148,6 +165,59 @@ void main() {
 
       final shopProducts = await DBService.getProducts();
       expect(shopProducts, isEmpty);
+    });
+
+    test('GodownItem and GodownMovement are registered in EntityRegistry and applied via ChangeProcessor', () async {
+      final isar = DBService.isar;
+      final item = GodownItem.create(
+        name: 'Remote Sync Oil',
+        quantity: 50,
+        unitCost: 120.0,
+        deviceId: 'peer-device-1',
+      );
+
+      final handler = EntityRegistry.get('GodownItem');
+      expect(handler, isNotNull);
+
+      // Apply incoming GodownItem CREATE
+      await isar.writeTxn(() async {
+        await handler!.applyChange(
+          item.toJson(),
+          'CREATE',
+          ConflictResolver(),
+          isar,
+        );
+      });
+
+      final stored = await DBService.getGodownItemByUuid(item.uuid);
+      expect(stored, isNotNull);
+      expect(stored!.name, 'Remote Sync Oil');
+      expect(stored.quantity, 50);
+
+      // Apply incoming GodownMovement CREATE
+      final movement = GodownMovement.create(
+        godownItemUuid: item.uuid,
+        godownItemName: item.name,
+        movementType: GodownMovementType.stockAdded,
+        quantityChanged: 50,
+        remainingQuantity: 50,
+      );
+
+      final movementHandler = EntityRegistry.get('GodownMovement');
+      expect(movementHandler, isNotNull);
+
+      await isar.writeTxn(() async {
+        await movementHandler!.applyChange(
+          movement.toJson(),
+          'CREATE',
+          ConflictResolver(),
+          isar,
+        );
+      });
+
+      final movements = await DBService.getGodownMovements(item.uuid);
+      expect(movements.length, 1);
+      expect(movements.first.quantityChanged, 50);
     });
   });
 }

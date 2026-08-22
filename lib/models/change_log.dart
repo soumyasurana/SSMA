@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:isar/isar.dart';
 
 part 'change_log.g.dart';

@@ -246,7 +246,7 @@ class DashboardService {
       } else {
         // Fallback to saleType
         if (sale.amountReceived > 0) {
-          final methodNormalized = 'cash';
+          const methodNormalized = 'cash';
           paymentMethodsSum[methodNormalized] = (paymentMethodsSum[methodNormalized] ?? 0.0) + sale.amountReceived;
         }
       }

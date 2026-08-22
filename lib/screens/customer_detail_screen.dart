@@ -83,22 +83,15 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       if (due <= 0) continue;
 
       final payment = remaining >= due ? due : remaining;
+      sale.amountReceived += payment;
 
-      await DBService.updateSalePaymentByUuid(
-        saleUuid: sale.uuid,
-        newAmountReceived: sale.amountReceived + payment,
-      );
+      await DBService.updateSale(sale);
 
       remaining -= payment;
       if (remaining <= 0) break;
     }
 
     final newDue = (_pendingDues - amount).clamp(0, double.infinity);
-
-    await DBService.updateCustomerDuesByUuid(
-      widget.customer.uuid,
-      newDue.toDouble(),
-    );
 
     final payment = CustomerPayment.create(
       customerUuid: widget.customer.uuid,

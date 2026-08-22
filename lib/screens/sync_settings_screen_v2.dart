@@ -880,7 +880,7 @@ class _DeviceCardState extends State<_DeviceCard> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext buildContext) {
     final device = widget.device;
     final pendingForPeer = widget.pendingChanges;
 
@@ -1103,7 +1103,7 @@ class _DeviceCardState extends State<_DeviceCard> {
                     color: _green,
                     onTap: _pairingInFlight
                         ? () {}
-                        : () => _requestPairing(context),
+                        : () => _requestPairing(),
                   ),
                 ],
               ),
@@ -1123,7 +1123,7 @@ class _DeviceCardState extends State<_DeviceCard> {
     };
   }
 
-  Future<void> _requestPairing(BuildContext context) async {
+  Future<void> _requestPairing() async {
     final local = syncV2;
     if (local == null) return;
 

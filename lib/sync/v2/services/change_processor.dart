@@ -9,6 +9,8 @@ import 'package:ssma/models/sale.dart';
 import 'package:ssma/models/purchase.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/supplier_payment.dart';
+import 'package:ssma/models/godown_item.dart';
+import 'package:ssma/models/godown_movement.dart';
 
 import '../models/sync_change_log.dart';
 import 'conflict_resolver.dart';
@@ -109,6 +111,8 @@ class EntityRegistry {
     register(PurchaseSyncHandler());
     register(CustomerPaymentSyncHandler());
     register(SupplierPaymentSyncHandler());
+    register(GodownItemSyncHandler());
+    register(GodownMovementSyncHandler());
     // 📌 New entity: register(YourEntitySyncHandler());
   }
 }
@@ -599,6 +603,89 @@ class SupplierPaymentSyncHandler implements EntitySyncHandler {
       return true;
     }
     return false;
+  }
+}
+
+// ── GodownItem ───────────────────────────────────────────────────────────────
+
+class GodownItemSyncHandler implements EntitySyncHandler {
+  @override
+  String get entityType => 'GodownItem';
+
+  @override
+  Future<bool> applyChange(
+    Map<String, dynamic> payload,
+    String operation,
+    ConflictResolver conflictResolver,
+    Isar isar,
+  ) async {
+    final incoming = GodownItem.fromJson(payload);
+    final existing = await isar.godownItems
+        .filter()
+        .uuidEqualTo(incoming.uuid)
+        .findFirst();
+
+    if (existing == null) {
+      incoming.isSynced = true;
+      await isar.godownItems.put(incoming);
+      return true;
+    }
+
+    if (operation == 'DELETE') {
+      existing
+        ..deleted = true
+        ..updatedAt = incoming.updatedAt
+        ..version = incoming.version
+        ..isSynced = true;
+      await isar.godownItems.put(existing);
+      return true;
+    }
+
+    if (conflictResolver.shouldApplyIncoming(_makeCtx(
+        entityType,
+        incoming.uuid,
+        incoming.version,
+        existing.version,
+        incoming.updatedAt.millisecondsSinceEpoch,
+        existing.updatedAt.millisecondsSinceEpoch,
+        incoming.deviceId,
+        existing.deviceId))) {
+      incoming
+        ..isarId = existing.isarId
+        ..isSynced = true;
+      await isar.godownItems.put(incoming);
+      return true;
+    }
+    return false;
+  }
+}
+
+// ── GodownMovement ───────────────────────────────────────────────────────────
+
+class GodownMovementSyncHandler implements EntitySyncHandler {
+  @override
+  String get entityType => 'GodownMovement';
+
+  @override
+  Future<bool> applyChange(
+    Map<String, dynamic> payload,
+    String operation,
+    ConflictResolver conflictResolver,
+    Isar isar,
+  ) async {
+    final incoming = GodownMovement.fromJson(payload);
+    final existing = await isar.godownMovements
+        .filter()
+        .uuidEqualTo(incoming.uuid)
+        .findFirst();
+
+    if (existing == null) {
+      await isar.godownMovements.put(incoming);
+      return true;
+    }
+
+    // Godown movements are immutable audit records; if already exists, skip
+    return true;
   }
 }
 

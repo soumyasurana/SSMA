@@ -319,6 +319,15 @@ class DBService {
       payload: (row) => row.toJson(),
     );
 
+    await _backfillTable<GodownMovement>(
+      entityType: 'GodownMovement',
+      journal: journal,
+      fetchRows: () => isar.godownMovements.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => 1,
+      payload: (row) => row.toJson(),
+    );
+
     debugPrint('DBService [V2 BACKFILL]: Journal backfill complete');
   }
 
@@ -1640,6 +1649,14 @@ class DBService {
         entityVersion: item.version,
       );
       await isar.godownMovements.put(movement);
+      await _appendChangeLog(
+        collection: 'GodownMovement',
+        operationType: 'CREATE',
+        payload: movement.toJson(),
+        recordId: movement.isarId,
+        entityUuid: movement.uuid,
+        entityVersion: 1,
+      );
     });
 
     await _flushJournalEntries();
@@ -1674,6 +1691,14 @@ class DBService {
         entityVersion: item.version,
       );
       await isar.godownMovements.put(movement);
+      await _appendChangeLog(
+        collection: 'GodownMovement',
+        operationType: 'CREATE',
+        payload: movement.toJson(),
+        recordId: movement.isarId,
+        entityUuid: movement.uuid,
+        entityVersion: 1,
+      );
     });
 
     await _flushJournalEntries();
@@ -1728,6 +1753,14 @@ class DBService {
         entityVersion: item.version,
       );
       await isar.godownMovements.put(movement);
+      await _appendChangeLog(
+        collection: 'GodownMovement',
+        operationType: 'CREATE',
+        payload: movement.toJson(),
+        recordId: movement.isarId,
+        entityUuid: movement.uuid,
+        entityVersion: 1,
+      );
     });
 
     await _flushJournalEntries();
@@ -1783,6 +1816,14 @@ class DBService {
         entityVersion: item.version,
       );
       await isar.godownMovements.put(movement);
+      await _appendChangeLog(
+        collection: 'GodownMovement',
+        operationType: 'CREATE',
+        payload: movement.toJson(),
+        recordId: movement.isarId,
+        entityUuid: movement.uuid,
+        entityVersion: 1,
+      );
 
       // Restore stock to linked inventory product
       if (linkedProduct != null && remainingQty > 0) {
@@ -1900,6 +1941,14 @@ class DBService {
       );
 
       await isar.godownMovements.put(movement);
+      await _appendChangeLog(
+        collection: 'GodownMovement',
+        operationType: 'CREATE',
+        payload: movement.toJson(),
+        recordId: movement.isarId,
+        entityUuid: movement.uuid,
+        entityVersion: 1,
+      );
     });
 
     await _flushJournalEntries();
