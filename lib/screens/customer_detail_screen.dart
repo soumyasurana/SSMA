@@ -4,7 +4,8 @@ import 'package:ssma/models/customer.dart';
 import 'package:ssma/models/sale.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/services/db_service.dart';
-import 'package:ssma/services/device_service.dart'; 
+import 'package:ssma/services/device_service.dart';
+import 'package:ssma/services/pdf_service.dart';
 
 class CustomerDetailScreen extends StatefulWidget {
   final Customer customer;
@@ -18,11 +19,35 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   List<Sale> _customerSales = [];
   double _pendingDues = 0;
   List<CustomerPayment> _customerPayments = [];
+  bool _isGeneratingLedger = false;
 
   @override
   void initState() {
     super.initState();
     _loadCustomerData();
+  }
+
+  Future<void> _generateLedger() async {
+    if (_isGeneratingLedger) return;
+    setState(() => _isGeneratingLedger = true);
+    try {
+      await PDFService.generateCustomerLedgerPdf(customer: widget.customer);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Ledger PDF generated")),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error generating ledger PDF: $e")),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isGeneratingLedger = false);
+      }
+    }
   }
 
   Future<void> _loadCustomerData() async {
@@ -148,6 +173,20 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       appBar: AppBar(
         title: Text('Customer: ${customer.name}'),
         backgroundColor: Colors.indigo,
+        actions: [
+          IconButton(
+            tooltip: "Download Ledger PDF",
+            icon: _isGeneratingLedger
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2),
+                  )
+                : const Icon(Icons.picture_as_pdf),
+            onPressed: _isGeneratingLedger ? null : _generateLedger,
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(12),
@@ -179,16 +218,35 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              if (_pendingDues > 0)
-                Center(
-                  child: ElevatedButton.icon(
-                    onPressed: _showPaymentDialog,
-                    icon: const Icon(Icons.currency_rupee),
-                    label: const Text("Update Payment"),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _isGeneratingLedger ? null : _generateLedger,
+                    icon: _isGeneratingLedger
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2),
+                          )
+                        : const Icon(Icons.picture_as_pdf),
+                    label: const Text("Download Ledger PDF"),
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green),
+                        backgroundColor: Colors.indigo),
                   ),
-                ),
+                  if (_pendingDues > 0) ...[
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: _showPaymentDialog,
+                      icon: const Icon(Icons.currency_rupee),
+                      label: const Text("Update Payment"),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green),
+                    ),
+                  ],
+                ],
+              ),
               const SizedBox(height: 24),
               const Text("Sales History",
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),

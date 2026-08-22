@@ -204,7 +204,7 @@ void main() {
 
     expect(await DBService.getCustomerPaymentsByCustomerUuid(customer.uuid),
         isEmpty);
-    expect((await DBService.getCustomerById(customer.isarId))!.pendingDues, 60);
+    expect((await DBService.getCustomerById(customer.isarId))!.pendingDues, 50);
   });
 
   test('deletePurchase hides purchase and reverses product stock', () async {

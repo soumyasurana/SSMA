@@ -23,7 +23,7 @@ class SalePaymentEntry {
 }
 
 class SaleMetadata {
-  static const _marker = '\n__SSMA_META__';
+  static const _marker = '__SSMA_META__';
 
   final String? visibleComment;
   final List<SalePaymentEntry> payments;
@@ -78,7 +78,7 @@ class SaleMetadata {
       'payments': payments.map((payment) => payment.toJson()).toList(),
     });
 
-    if (cleanComment.isEmpty) return '${_marker.trimLeft()}$payload';
-    return '$cleanComment$_marker$payload';
+    if (cleanComment.isEmpty) return '$_marker$payload';
+    return '$cleanComment\n$_marker$payload';
   }
 }

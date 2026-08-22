@@ -193,7 +193,6 @@ Future<void> _generateInvoice(Sale sale) async {
   }
 }
 
-
   @override
   Widget build(BuildContext context) {
     final dateFormatter = DateFormat('dd MMM yyyy – hh:mm a');
@@ -236,6 +235,7 @@ Future<void> _generateInvoice(Sale sale) async {
                       final received = sale.amountReceived;
                       final total = sale.totalAmount;
                       final pending = (total - received).clamp(0, total);
+                      final isGenerating = _pdfGeneratingSales.contains(sale.uuid);
 
                       return Card(
                         elevation: 4,
@@ -307,16 +307,14 @@ Future<void> _generateInvoice(Sale sale) async {
                                 children: [
                                   IconButton(
                                     tooltip: "Generate Invoice PDF",
-                                    icon: _pdfGeneratingSales.contains(sale.uuid)
+                                    icon: isGenerating
                                         ? const SizedBox(
                                             width: 24,
                                             height: 24,
                                             child: CircularProgressIndicator(strokeWidth: 2),
                                           )
                                         : const Icon(Icons.picture_as_pdf, color: Colors.green),
-                                    onPressed: _pdfGeneratingSales.contains(sale.uuid)
-                                        ? null
-                                        : () async => await _generateInvoice(sale),
+                                    onPressed: isGenerating ? null : () => _generateInvoice(sale),
                                   ),
                                   if (sale.saleType == SaleType.credit)
                                     IconButton(

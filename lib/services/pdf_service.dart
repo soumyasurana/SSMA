@@ -4,9 +4,11 @@ import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ssma/models/sale.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:ssma/services/db_service.dart';
+import 'package:ssma/models/customer.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/supplier.dart';
 import 'package:ssma/models/purchase.dart';
@@ -332,6 +334,27 @@ class PDFService {
                     ),
                   ],
 
+                  if (metadata.payments.isNotEmpty) ...[
+                    pw.Container(height: 0.5, color: dividerColor),
+                    ...metadata.payments.map(
+                      (payment) => pw.Container(
+                        padding: const pw.EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 5),
+                        child: pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text('${payment.method} Paid:', style: labelStyle),
+                            pw.Text('Rs. ${payment.amount.toStringAsFixed(2)}',
+                                style: pw.TextStyle(
+                                    font: boldFont,
+                                    fontSize: 11,
+                                    color: PdfColors.green800)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+
                   if (sale.amountReceived > 0) ...[
                     pw.Container(height: 0.5, color: dividerColor),
                     pw.Container(
@@ -340,7 +363,7 @@ class PDFService {
                       child: pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
-                          pw.Text('Amount Paid:', style: labelStyle),
+                          pw.Text('Total Paid:', style: labelStyle),
                           pw.Text(
                               'Rs. ${sale.amountReceived.toStringAsFixed(2)}',
                               style: pw.TextStyle(
@@ -348,27 +371,6 @@ class PDFService {
                                   fontSize: 12,
                                   color: PdfColors.green800)),
                         ],
-                      ),
-                    ),
-                  ],
-
-                  if (metadata.payments.isNotEmpty) ...[
-                    pw.Container(height: 0.5, color: dividerColor),
-                    ...metadata.payments.map(
-                      (payment) => pw.Container(
-                        padding: const pw.EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        child: pw.Row(
-                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                          children: [
-                            pw.Text(payment.method, style: labelStyle),
-                            pw.Text('Rs. ${payment.amount.toStringAsFixed(2)}',
-                                style: pw.TextStyle(
-                                    font: boldFont,
-                                    fontSize: 11,
-                                    color: PdfColors.green800)),
-                          ],
-                        ),
                       ),
                     ),
                   ],
@@ -429,21 +431,6 @@ class PDFService {
             ),
             pw.SizedBox(height: 12),
           ],
-
-          pw.Spacer(),
-
-          // Footer
-          pw.Divider(color: dividerColor),
-          pw.SizedBox(height: 4),
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              pw.Text('Thank you for your business!',
-                  style: pw.TextStyle(
-                      font: boldFont, fontSize: 10, color: primaryColor)),
-              pw.Text('Page 1 of 1', style: labelStyle),
-            ],
-          ),
         ],
       ),
     );
@@ -455,6 +442,462 @@ class PDFService {
     if (openGeneratedFiles) {
       await OpenFilex.open(file.path);
     }
+  }
+
+  // =========================================================================
+  // generateCustomerLedgerPdf (Plain B&W Tally-style Ledger Statement)
+  // =========================================================================
+  static Future<void> generateCustomerLedgerPdf({required Customer customer}) async {
+    if (!generateFiles) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final storeName = prefs.getString('ssma_store_name') ?? 'Surana Electronics';
+
+    final pdf = pw.Document();
+    pw.Font font;
+    pw.Font boldFont;
+    try {
+      font = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Regular.ttf"));
+      boldFont = pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
+    } catch (_) {
+      font = pw.Font.helvetica();
+      boldFont = pw.Font.helveticaBold();
+    }
+
+    final partyName = customer.name.isNotEmpty ? customer.name : 'Customer Account';
+
+    // Fetch all related transactions for this party
+    final allSales = await DBService.getAllSales();
+    final List<CustomerPayment> allPayments =
+        await DBService.getCustomerPaymentsByCustomerUuid(customer.uuid);
+
+    // Filter sales for this party (by UUID or name/phone)
+    final partySales = allSales.where((s) {
+      if (s.customerUuid != null && s.customerUuid!.isNotEmpty) {
+        return s.customerUuid == customer.uuid;
+      }
+      return (s.buyerName?.toLowerCase() == customer.name.toLowerCase()) ||
+          (customer.phone != null && customer.phone!.isNotEmpty && s.buyerContact == customer.phone);
+    }).toList();
+
+    // Sort chronologically
+    partySales.sort((a, b) => a.date.compareTo(b.date));
+    allPayments.sort((a, b) => a.date.compareTo(b.date));
+
+    // Combine into timeline
+    final events = <dynamic>[...partySales, ...allPayments];
+    events.sort((a, b) {
+      final dateA = (a is Sale) ? a.date : (a as CustomerPayment).date;
+      final dateB = (b is Sale) ? b.date : (b as CustomerPayment).date;
+      return dateA.compareTo(dateB);
+    });
+
+    final DateTime startDate = events.isNotEmpty
+        ? ((events.first is Sale) ? (events.first as Sale).date : (events.first as CustomerPayment).date)
+        : DateTime.now();
+    final DateTime endDate = events.isNotEmpty
+        ? ((events.last is Sale) ? (events.last as Sale).date : (events.last as CustomerPayment).date)
+        : DateTime.now();
+
+    final periodStr =
+        '${DateFormat('d-MMM-yyyy').format(startDate)} to ${DateFormat('d-MMM-yyyy').format(endDate)}';
+
+    final indianFmt = NumberFormat('#,##,##0.00', 'en_IN');
+    String fmt(double val) => indianFmt.format(val);
+
+    // Calculate opening balance prior to startDate
+    double openingBalance = 0.0;
+    final priorSales = partySales.where((s) => s.date.isBefore(startDate));
+    final priorPayments = allPayments.where((p) => p.date.isBefore(startDate));
+
+    for (final s in priorSales) {
+      if (s.saleType == SaleType.credit) {
+        openingBalance += s.totalAmount;
+        openingBalance -= s.amountReceived;
+      }
+    }
+    for (final p in priorPayments) {
+      openingBalance -= p.amountReceived;
+    }
+
+    final List<_TallyLedgerRow> rows = [];
+
+    // 1. Opening Balance Row
+    if (openingBalance != 0 || events.isEmpty) {
+      rows.add(_TallyLedgerRow(
+        date: '${startDate.day}-${startDate.month}-${startDate.year}',
+        prefix: openingBalance >= 0 ? 'To' : 'By',
+        particulars: 'Opening Balance',
+        vchType: '',
+        vchNo: '',
+        debit: openingBalance >= 0 ? openingBalance : null,
+        credit: openingBalance < 0 ? -openingBalance : null,
+        isOpening: true,
+      ));
+    }
+
+    // 2. Transaction Rows with payment method breakdown (Cash, UPI, etc.)
+    for (final event in events) {
+      final dateStr = '${event.date.day}-${event.date.month}-${event.date.year}';
+
+      if (event is Sale) {
+        final vchNoStr = event.isarId.toString().padLeft(3, '0');
+
+        // Sales Debit Entry
+        rows.add(_TallyLedgerRow(
+          date: dateStr,
+          prefix: 'To',
+          particulars: 'Sales',
+          vchType: 'Sales',
+          vchNo: vchNoStr,
+          debit: event.totalAmount,
+          credit: null,
+        ));
+
+        // Payment / Receipt Entries (Cash, UPI, etc. breakdown)
+        final metadata = SaleMetadata.parse(event.comment);
+        if (metadata.payments.isNotEmpty) {
+          for (final p in metadata.payments) {
+            rows.add(_TallyLedgerRow(
+              date: dateStr,
+              prefix: 'By',
+              particulars: p.method, // e.g. Cash, UPI, Card, Bank Transfer
+              vchType: 'Receipt',
+              vchNo: vchNoStr,
+              debit: null,
+              credit: p.amount,
+            ));
+          }
+        } else if (event.amountReceived > 0) {
+          rows.add(_TallyLedgerRow(
+            date: dateStr,
+            prefix: 'By',
+            particulars: event.saleType == SaleType.cash ? 'Cash' : 'Receipt',
+            vchType: 'Receipt',
+            vchNo: vchNoStr,
+            debit: null,
+            credit: event.amountReceived,
+          ));
+        }
+      } else if (event is CustomerPayment) {
+        final vchNoStr = event.isarId.toString().padLeft(3, '0');
+
+        rows.add(_TallyLedgerRow(
+          date: dateStr,
+          prefix: 'By',
+          particulars: 'Cash',
+          vchType: 'Receipt',
+          vchNo: vchNoStr,
+          debit: null,
+          credit: event.amountReceived,
+        ));
+      }
+    }
+
+    // Calculate totals
+    double totalDebit = 0.0;
+    double totalCredit = 0.0;
+
+    for (final r in rows) {
+      if (r.debit != null) totalDebit += r.debit!;
+      if (r.credit != null) totalCredit += r.credit!;
+    }
+
+    final double closingBalance = totalDebit - totalCredit;
+    final double grandTotal = totalDebit > totalCredit ? totalDebit : totalCredit;
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 36, vertical: 36),
+        header: (context) => pw.Column(
+          children: [
+            pw.Center(
+              child: pw.Column(
+                children: [
+                  pw.Text(partyName,
+                      style: pw.TextStyle(font: boldFont, fontSize: 14)),
+                  pw.SizedBox(height: 2),
+                  pw.Text(storeName,
+                      style: pw.TextStyle(font: boldFont, fontSize: 12)),
+                  pw.Text('Ledger Account',
+                      style: pw.TextStyle(font: font, fontSize: 10)),
+                  pw.Text('Shop No:250, Old L.R Market,',
+                      style: pw.TextStyle(font: font, fontSize: 9)),
+                  pw.Text('Delhi',
+                      style: pw.TextStyle(font: font, fontSize: 9)),
+                  pw.Text('Mob No.9810159367',
+                      style: pw.TextStyle(font: font, fontSize: 9)),
+                  pw.SizedBox(height: 4),
+                  pw.Text(periodStr,
+                      style: pw.TextStyle(font: font, fontSize: 9)),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 6),
+            pw.Align(
+              alignment: pw.Alignment.centerRight,
+              child: pw.Text('Page ${context.pageNumber}',
+                  style: pw.TextStyle(font: font, fontSize: 9)),
+            ),
+          ],
+        ),
+        build: (context) {
+          final tableRows = <pw.TableRow>[];
+
+          // 1. Table Header Row
+          tableRows.add(
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(
+                border: pw.Border(
+                  top: pw.BorderSide(color: PdfColors.black, width: 0.75),
+                  bottom: pw.BorderSide(color: PdfColors.black, width: 0.75),
+                ),
+              ),
+              children: [
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4),
+                  child: pw.Text('Date',
+                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4),
+                  child: pw.Text('Particulars',
+                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4),
+                  child: pw.Text('Vch Type',
+                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4),
+                  child: pw.Text('Vch No.',
+                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text('Debit',
+                        style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                  ),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text('Credit',
+                        style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          // 2. Data Rows
+          for (final r in rows) {
+            tableRows.add(
+              pw.TableRow(
+                children: [
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Text(r.date,
+                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                  ),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Row(
+                      children: [
+                        pw.SizedBox(
+                          width: 20,
+                          child: pw.Text(r.prefix,
+                              style: pw.TextStyle(font: font, fontSize: 9.5)),
+                        ),
+                        pw.SizedBox(width: 8),
+                        pw.Text(r.particulars,
+                            style: pw.TextStyle(
+                                font: r.isOpening ? boldFont : font,
+                                fontSize: 9.5)),
+                      ],
+                    ),
+                  ),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Text(r.vchType,
+                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                  ),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Text(r.vchNo,
+                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                  ),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Align(
+                      alignment: pw.Alignment.centerRight,
+                      child: pw.Text(
+                        r.debit != null ? fmt(r.debit!) : '',
+                        style: pw.TextStyle(
+                            font: r.isOpening ? boldFont : font, fontSize: 9.5),
+                      ),
+                    ),
+                  ),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Align(
+                      alignment: pw.Alignment.centerRight,
+                      child: pw.Text(
+                        r.credit != null ? fmt(r.credit!) : '',
+                        style: pw.TextStyle(
+                            font: r.isOpening ? boldFont : font, fontSize: 9.5),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          // 3. Subtotals Row
+          tableRows.add(
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(
+                border: pw.Border(
+                  top: pw.BorderSide(color: PdfColors.black, width: 0.5),
+                ),
+              ),
+              children: [
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text(fmt(totalDebit),
+                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                  ),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text(fmt(totalCredit),
+                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          // 4. Closing Balance Row
+          tableRows.add(
+            pw.TableRow(
+              children: [
+                pw.SizedBox(),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                  child: pw.Row(
+                    children: [
+                      pw.SizedBox(
+                        width: 20,
+                        child: pw.Text('By',
+                            style: pw.TextStyle(font: font, fontSize: 9.5)),
+                      ),
+                      pw.SizedBox(width: 8),
+                      pw.Text('Closing Balance',
+                          style: pw.TextStyle(font: boldFont, fontSize: 9.5)),
+                    ],
+                  ),
+                ),
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text(
+                      closingBalance >= 0 ? fmt(closingBalance) : '',
+                      style: pw.TextStyle(font: boldFont, fontSize: 9.5),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          // 5. Grand Balanced Total Row (with double bottom line!)
+          tableRows.add(
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(
+                border: pw.Border(
+                  top: pw.BorderSide(color: PdfColors.black, width: 0.5),
+                  bottom: pw.BorderSide(
+                      color: PdfColors.black,
+                      width: 1.5,
+                      style: pw.BorderStyle.solid),
+                ),
+              ),
+              children: [
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.SizedBox(),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text(fmt(grandTotal),
+                        style: pw.TextStyle(font: boldFont, fontSize: 9.5)),
+                  ),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text(fmt(grandTotal),
+                        style: pw.TextStyle(font: boldFont, fontSize: 9.5)),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          return [
+            pw.Table(
+              columnWidths: const {
+                0: pw.FixedColumnWidth(65),
+                1: pw.FlexColumnWidth(3),
+                2: pw.FixedColumnWidth(65),
+                3: pw.FixedColumnWidth(50),
+                4: pw.FixedColumnWidth(90),
+                5: pw.FixedColumnWidth(90),
+              },
+              children: tableRows,
+            ),
+          ];
+        },
+      ),
+    );
+
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File(
+        '${dir.path}/Ledger_${customer.name}_${DateTime.now().millisecondsSinceEpoch}.pdf');
+    await file.writeAsBytes(await pdf.save());
+    if (openGeneratedFiles) {
+      await OpenFilex.open(file.path);
+    }
+  }
+
+  static Future<void> generateLedgerPdf(Sale sale) async {
+    final customer = Customer()
+      ..uuid = sale.customerUuid ?? ''
+      ..name = sale.buyerName ?? 'Customer Account'
+      ..phone = sale.buyerContact;
+    await generateCustomerLedgerPdf(customer: customer);
   }
 
   // =========================================================================
@@ -704,4 +1147,26 @@ class PDFService {
       await OpenFilex.open(file.path);
     }
   }
+}
+
+class _TallyLedgerRow {
+  final String date;
+  final String prefix;
+  final String particulars;
+  final String vchType;
+  final String vchNo;
+  final double? debit;
+  final double? credit;
+  final bool isOpening;
+
+  const _TallyLedgerRow({
+    required this.date,
+    required this.prefix,
+    required this.particulars,
+    required this.vchType,
+    required this.vchNo,
+    this.debit,
+    this.credit,
+    this.isOpening = false,
+  });
 }

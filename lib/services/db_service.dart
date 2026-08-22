@@ -15,6 +15,8 @@ import 'package:ssma/models/sale_item.dart';
 import 'package:ssma/models/supplier.dart';
 import 'package:ssma/models/supplier_payment.dart';
 import 'package:ssma/models/peer_state.dart';
+import 'package:ssma/models/godown_item.dart';
+import 'package:ssma/models/godown_movement.dart';
 
 // ── Sync v2 models ──────────────────────────────────────────────────────────
 import 'package:ssma/sync/v2/models/sync_change_log.dart';
@@ -209,6 +211,8 @@ class DBService {
         SupplierSchema,
         SupplierPaymentSchema,
         PeerStateSchema,
+        GodownItemSchema,
+        GodownMovementSchema,
         // ── Sync v2 models ──────────────────────────────────────
         SyncChangeLogSchema,
         PeerDeviceSchema,
@@ -301,6 +305,15 @@ class DBService {
       entityType: 'SupplierPayment',
       journal: journal,
       fetchRows: () => isar.supplierPayments.where().findAll(),
+      entityId: (row) => row.uuid,
+      entityVersion: (row) => row.version,
+      payload: (row) => row.toJson(),
+    );
+
+    await _backfillTable<GodownItem>(
+      entityType: 'GodownItem',
+      journal: journal,
+      fetchRows: () => isar.godownItems.where().findAll(),
       entityId: (row) => row.uuid,
       entityVersion: (row) => row.version,
       payload: (row) => row.toJson(),
@@ -1577,6 +1590,333 @@ class DBService {
       debugPrint(
           'DBService [CLEANUP]: ❌ Failed to run peer cleanup migration: $e\n$st');
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // GODOWN STOCK & MOVEMENTS
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  static Future<List<GodownItem>> getGodownItems() async {
+    return isar.godownItems.filter().deletedEqualTo(false).findAll();
+  }
+
+  static Future<GodownItem?> getGodownItemByUuid(String uuid) async {
+    return isar.godownItems
+        .filter()
+        .uuidEqualTo(uuid)
+        .and()
+        .deletedEqualTo(false)
+        .findFirst();
+  }
+
+  static Future<void> addGodownItem(GodownItem item) async {
+    final now = DateTime.now();
+    item.createdAt = now;
+    item.updatedAt = now;
+    item.deleted = false;
+    item.version = 1;
+    item.isSynced = false;
+    if (item.deviceId.trim().isEmpty || item.deviceId == 'unknown') {
+      item.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
+    }
+
+    final movement = GodownMovement.create(
+      godownItemUuid: item.uuid,
+      godownItemName: item.name,
+      movementType: GodownMovementType.stockAdded,
+      quantityChanged: item.quantity,
+      remainingQuantity: item.quantity,
+      note: 'Initial godown stock added',
+    );
+
+    await isar.writeTxn(() async {
+      await isar.godownItems.put(item);
+      await _appendChangeLog(
+        collection: 'GodownItem',
+        operationType: 'CREATE',
+        payload: item.toJson(),
+        recordId: item.isarId,
+        entityUuid: item.uuid,
+        entityVersion: item.version,
+      );
+      await isar.godownMovements.put(movement);
+    });
+
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
+  }
+
+  static Future<void> updateGodownItem(GodownItem item) async {
+    item.updatedAt = DateTime.now();
+    item.isSynced = false;
+    item.version += 1;
+    if (item.deviceId.trim().isEmpty || item.deviceId == 'unknown') {
+      item.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
+    }
+
+    final movement = GodownMovement.create(
+      godownItemUuid: item.uuid,
+      godownItemName: item.name,
+      movementType: GodownMovementType.manualAdjustment,
+      quantityChanged: 0,
+      remainingQuantity: item.quantity,
+      note: 'Godown item details updated',
+    );
+
+    await isar.writeTxn(() async {
+      await isar.godownItems.put(item);
+      await _appendChangeLog(
+        collection: 'GodownItem',
+        operationType: 'UPDATE',
+        payload: item.toJson(),
+        recordId: item.isarId,
+        entityUuid: item.uuid,
+        entityVersion: item.version,
+      );
+      await isar.godownMovements.put(movement);
+    });
+
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
+  }
+
+  static Future<void> adjustGodownQuantity({
+    required String godownItemUuid,
+    required int deltaQuantity,
+    String? note,
+  }) async {
+    final item = await isar.godownItems
+        .filter()
+        .uuidEqualTo(godownItemUuid)
+        .and()
+        .deletedEqualTo(false)
+        .findFirst();
+
+    if (item == null) throw StateError('Godown item not found.');
+
+    final newQty = item.quantity + deltaQuantity;
+    if (newQty < 0) {
+      throw StateError('Cannot reduce stock below zero. Current: ${item.quantity}');
+    }
+
+    item.quantity = newQty;
+    item.updatedAt = DateTime.now();
+    item.isSynced = false;
+    item.version += 1;
+
+    final movementType = deltaQuantity > 0
+        ? GodownMovementType.quantityIncreased
+        : GodownMovementType.quantityDecreased;
+
+    final movement = GodownMovement.create(
+      godownItemUuid: item.uuid,
+      godownItemName: item.name,
+      movementType: movementType,
+      quantityChanged: deltaQuantity,
+      remainingQuantity: item.quantity,
+      note: note ?? (deltaQuantity > 0 ? 'Stock increased' : 'Stock decreased'),
+    );
+
+    await isar.writeTxn(() async {
+      await isar.godownItems.put(item);
+      await _appendChangeLog(
+        collection: 'GodownItem',
+        operationType: 'UPDATE',
+        payload: item.toJson(),
+        recordId: item.isarId,
+        entityUuid: item.uuid,
+        entityVersion: item.version,
+      );
+      await isar.godownMovements.put(movement);
+    });
+
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
+  }
+
+  static Future<void> deleteGodownItem(String godownItemUuid) async {
+    final item = await isar.godownItems
+        .filter()
+        .uuidEqualTo(godownItemUuid)
+        .and()
+        .deletedEqualTo(false)
+        .findFirst();
+
+    if (item == null) return;
+
+    // Pre-load linked product BEFORE writeTxn (Isar 3.x rule)
+    Product? linkedProduct;
+    if (item.productUuid != null && item.productUuid!.isNotEmpty) {
+      linkedProduct = await isar.products
+          .filter()
+          .uuidEqualTo(item.productUuid!)
+          .and()
+          .deletedEqualTo(false)
+          .findFirst();
+    }
+
+    final remainingQty = item.quantity;
+    item.deleted = true;
+    item.updatedAt = DateTime.now();
+    item.isSynced = false;
+    item.version += 1;
+
+    final movement = GodownMovement.create(
+      godownItemUuid: item.uuid,
+      godownItemName: item.name,
+      movementType: GodownMovementType.stockRemoved,
+      quantityChanged: -remainingQty,
+      remainingQuantity: 0,
+      note: linkedProduct != null
+          ? 'Stock removed from godown and returned to shop inventory'
+          : 'Stock item removed from godown',
+    );
+
+    await isar.writeTxn(() async {
+      await isar.godownItems.put(item);
+      await _appendChangeLog(
+        collection: 'GodownItem',
+        operationType: 'DELETE',
+        payload: item.toJson(),
+        recordId: item.isarId,
+        entityUuid: item.uuid,
+        entityVersion: item.version,
+      );
+      await isar.godownMovements.put(movement);
+
+      // Restore stock to linked inventory product
+      if (linkedProduct != null && remainingQty > 0) {
+        linkedProduct.quantity += remainingQty;
+        linkedProduct.updatedAt = DateTime.now();
+        linkedProduct.isSynced = false;
+        linkedProduct.version += 1;
+        await isar.products.put(linkedProduct);
+        await _appendChangeLog(
+          collection: 'Product',
+          operationType: 'UPDATE',
+          payload: linkedProduct.toJson(),
+          recordId: linkedProduct.isarId,
+          entityUuid: linkedProduct.uuid,
+          entityVersion: linkedProduct.version,
+        );
+      }
+    });
+
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
+  }
+
+  static Future<void> transferGodownToShop({
+    required String godownItemUuid,
+    required int transferQuantity,
+  }) async {
+    if (transferQuantity <= 0) {
+      throw ArgumentError('Transfer quantity must be greater than zero.');
+    }
+
+    // Pre-load entities BEFORE write transaction (Isar 3.x restriction)
+    final godownItem = await isar.godownItems
+        .filter()
+        .uuidEqualTo(godownItemUuid)
+        .and()
+        .deletedEqualTo(false)
+        .findFirst();
+
+    if (godownItem == null) {
+      throw StateError('Godown item not found.');
+    }
+
+    if (godownItem.quantity < transferQuantity) {
+      throw StateError(
+          'Cannot transfer $transferQuantity units. Only ${godownItem.quantity} units available in godown.');
+    }
+
+    // Check if matching product already exists in shop inventory (case-insensitive name match)
+    final existingProducts =
+        await isar.products.filter().deletedEqualTo(false).findAll();
+    Product? targetProduct;
+    for (final p in existingProducts) {
+      if (p.name.trim().toLowerCase() == godownItem.name.trim().toLowerCase()) {
+        targetProduct = p;
+        break;
+      }
+    }
+
+    final isNewProduct = (targetProduct == null);
+    final String deviceId = syncV2?.deviceId ?? _kUnknownDevice;
+
+    if (targetProduct == null) {
+      targetProduct = Product.create(
+        name: godownItem.name.trim(),
+        salePrice: godownItem.unitCost > 0 ? godownItem.unitCost * 1.2 : 0,
+        purchasePrice: godownItem.unitCost,
+        quantity: transferQuantity,
+        deviceId: deviceId,
+      );
+    } else {
+      targetProduct.quantity += transferQuantity;
+      targetProduct.updatedAt = DateTime.now();
+      targetProduct.isSynced = false;
+      targetProduct.version += 1;
+    }
+
+    // Mutate godown item
+    godownItem.quantity -= transferQuantity;
+    godownItem.updatedAt = DateTime.now();
+    godownItem.isSynced = false;
+    godownItem.version += 1;
+
+    // Create movement audit record
+    final movement = GodownMovement.create(
+      godownItemUuid: godownItem.uuid,
+      godownItemName: godownItem.name,
+      movementType: GodownMovementType.transferToShop,
+      quantityChanged: -transferQuantity,
+      remainingQuantity: godownItem.quantity,
+      referenceId: targetProduct.uuid,
+      note: 'Transferred $transferQuantity units to shop inventory',
+    );
+
+    // Single atomic write transaction — both puts together
+    await isar.writeTxn(() async {
+      await isar.godownItems.put(godownItem);
+      await _appendChangeLog(
+        collection: 'GodownItem',
+        operationType: 'UPDATE',
+        payload: godownItem.toJson(),
+        recordId: godownItem.isarId,
+        entityUuid: godownItem.uuid,
+        entityVersion: godownItem.version,
+      );
+
+      await _putProductSafe(targetProduct!);
+      await _appendChangeLog(
+        collection: 'Product',
+        operationType: isNewProduct ? 'CREATE' : 'UPDATE',
+        payload: targetProduct.toJson(),
+        recordId: targetProduct.isarId,
+        entityUuid: targetProduct.uuid,
+        entityVersion: targetProduct.version,
+      );
+
+      await isar.godownMovements.put(movement);
+    });
+
+    await _flushJournalEntries();
+    syncV2?.triggerDebouncedSync();
+  }
+
+  static Future<List<GodownMovement>> getGodownMovements(
+      String godownItemUuid) async {
+    return isar.godownMovements
+        .filter()
+        .godownItemUuidEqualTo(godownItemUuid)
+        .sortByCreatedAtDesc()
+        .findAll();
+  }
+
+  static Future<List<GodownMovement>> getAllGodownMovements() async {
+    return isar.godownMovements.where().sortByCreatedAtDesc().findAll();
   }
 
   static Future<void> _backfillTable<T>({
