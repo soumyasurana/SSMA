@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:ssma/models/customer.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/product.dart';
@@ -11,8 +11,9 @@ import 'package:ssma/models/purchase_item.dart';
 import 'package:ssma/models/sale.dart';
 import 'package:ssma/models/sale_item.dart';
 import 'package:ssma/services/db_service.dart';
-import 'package:ssma/sync/v2/models/sync_change_log.dart';
+import 'package:ssma/sync/v2/services/change_processor.dart';
 import 'package:ssma/sync/v2/services/change_journal.dart';
+import 'package:ssma/sync/v2/services/conflict_resolver.dart';
 import 'package:ssma/sync/v2/sync_initializer_v2.dart';
 
 void main() {
@@ -178,7 +179,8 @@ void main() {
     expect((await DBService.getProductByUuid(product.uuid))!.quantity, 7);
   });
 
-  test('deleted customer payments are hidden and cannot restore dues twice',
+  test(
+      'deleted customer payments are hidden and cannot restore stale cached dues',
       () async {
     final customer = Customer.create(
       name: 'Asha',
@@ -204,7 +206,9 @@ void main() {
 
     expect(await DBService.getCustomerPaymentsByCustomerUuid(customer.uuid),
         isEmpty);
-    expect((await DBService.getCustomerById(customer.isarId))!.pendingDues, 50);
+    final reloaded = (await DBService.getCustomerById(customer.isarId))!;
+    expect(reloaded.pendingDues, 0);
+    expect(reloaded.advanceBalance, 0);
   });
 
   test('deletePurchase hides purchase and reverses product stock', () async {
@@ -241,5 +245,71 @@ void main() {
 
     expect(await DBService.getAllPurchases(), isEmpty);
     expect((await DBService.getProductByUuid(product.uuid))!.quantity, 10);
+  });
+
+  test('deleted products stay hidden and cannot be resurrected by stale sync',
+      () async {
+    final product = Product.create(
+      name: 'Delete Me Item',
+      salePrice: 10,
+      purchasePrice: 5,
+      quantity: 3,
+      deviceId: 'test-device',
+    );
+    await DBService.addProduct(product);
+
+    final stalePayload = product.toJson();
+    await DBService.deleteProduct(product.uuid);
+
+    stalePayload['version'] = product.version + 10;
+    stalePayload['updated_at'] =
+        DateTime.now().add(const Duration(minutes: 5)).toIso8601String();
+    stalePayload['is_deleted'] = false;
+
+    final handler = ProductSyncHandler();
+    final resolver = ConflictResolver();
+    await DBService.isar.writeTxn(() async {
+      final applied = await handler.applyChange(
+          stalePayload, 'UPDATE', resolver, DBService.isar);
+      expect(applied, false);
+    });
+
+    expect(await DBService.getProducts(), isEmpty);
+    expect(await DBService.getProductByUuid(product.uuid), isNull);
+    final tombstone = await DBService.isar.products
+        .filter()
+        .uuidEqualTo(product.uuid)
+        .findFirst();
+    expect(tombstone!.deleted, true);
+  });
+
+  test('deleted customers stay hidden and cannot be resurrected by stale sync',
+      () async {
+    final customer = Customer.create(
+      name: 'Delete Me Customer',
+      phone: '123',
+      deviceId: 'test-device',
+    );
+    await DBService.addCustomer(customer);
+
+    final stalePayload = customer.toJson();
+    await DBService.deleteCustomer(customer.uuid, isarId: customer.isarId);
+
+    stalePayload['version'] = customer.version + 10;
+    stalePayload['updated_at'] =
+        DateTime.now().add(const Duration(minutes: 5)).toIso8601String();
+    stalePayload['is_deleted'] = false;
+
+    final handler = CustomerSyncHandler();
+    final resolver = ConflictResolver();
+    await DBService.isar.writeTxn(() async {
+      final applied = await handler.applyChange(
+          stalePayload, 'UPDATE', resolver, DBService.isar);
+      expect(applied, false);
+    });
+
+    expect(await DBService.getCustomers(), isEmpty);
+    final tombstone = await DBService.getCustomerById(customer.isarId);
+    expect(tombstone!.deleted, true);
   });
 }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:isar/isar.dart';
-import 'package:ssma/models/customer.dart';
+import 'package:isar_community/isar.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/godown_item.dart';
 import 'package:ssma/models/godown_movement.dart';
@@ -25,7 +24,8 @@ class ReportService {
 
       case ReportTimePreset.yesterday:
         final yStart = todayStart.subtract(const Duration(days: 1));
-        final yEnd = DateTime(yStart.year, yStart.month, yStart.day, 23, 59, 59, 999);
+        final yEnd =
+            DateTime(yStart.year, yStart.month, yStart.day, 23, 59, 59, 999);
         return DateTimeRange(start: yStart, end: yEnd);
 
       case ReportTimePreset.thisWeek:
@@ -36,7 +36,9 @@ class ReportService {
       case ReportTimePreset.thisMonth:
         final monthStart = DateTime(now.year, now.month, 1);
         final monthEnd = DateTime(now.year, now.month + 1, 0, 23, 59, 59, 999);
-        return DateTimeRange(start: monthStart, end: monthEnd.isAfter(todayEnd) ? todayEnd : monthEnd);
+        return DateTimeRange(
+            start: monthStart,
+            end: monthEnd.isAfter(todayEnd) ? todayEnd : monthEnd);
 
       case ReportTimePreset.lastMonth:
         final lastMonthStart = DateTime(now.year, now.month - 1, 1);
@@ -131,13 +133,17 @@ class ReportService {
         .findAll();
 
     // 5. Fetch Global Business Entities
-    final allProducts = await isar.products.filter().deletedEqualTo(false).findAll();
-    final allCustomers = await isar.customers.filter().deletedEqualTo(false).findAll();
-    final allSuppliers = await isar.suppliers.filter().deletedEqualTo(false).findAll();
-    final allSales = await isar.sales.filter().deletedEqualTo(false).findAll();
-    final allPurchases = await isar.purchases.filter().deletedEqualTo(false).findAll();
-    final allSupplierPayments = await isar.supplierPayments.filter().deletedEqualTo(false).findAll();
-    final allGodownItems = await isar.godownItems.filter().deletedEqualTo(false).findAll();
+    final allProducts =
+        await isar.products.filter().deletedEqualTo(false).findAll();
+    final allCustomers = await DBService.getCustomers();
+    final allSuppliers =
+        await isar.suppliers.filter().deletedEqualTo(false).findAll();
+    final allPurchases =
+        await isar.purchases.filter().deletedEqualTo(false).findAll();
+    final allSupplierPayments =
+        await isar.supplierPayments.filter().deletedEqualTo(false).findAll();
+    final allGodownItems =
+        await isar.godownItems.filter().deletedEqualTo(false).findAll();
     final allMovements = await isar.godownMovements.where().findAll();
 
     final productMap = {for (final p in allProducts) p.uuid: p};
@@ -199,7 +205,8 @@ class ReportService {
 
         saleCost += itemTotalCost;
 
-        final pKey = item.productUuid.isNotEmpty ? item.productUuid : item.productName;
+        final pKey =
+            item.productUuid.isNotEmpty ? item.productUuid : item.productName;
         productStats.putIfAbsent(
           pKey,
           () => _ProductAggregator(
@@ -238,8 +245,7 @@ class ReportService {
     final profitMarginPercentage =
         grossSales > 0 ? (grossProfit / grossSales) * 100 : 0.0;
     final totalOrders = sales.length;
-    final averageOrderValue =
-        totalOrders > 0 ? grossSales / totalOrders : 0.0;
+    final averageOrderValue = totalOrders > 0 ? grossSales / totalOrders : 0.0;
 
     final cashSalesRatio =
         grossSales > 0 ? (cashSalesTotal / grossSales) * 100 : 0.0;
@@ -264,8 +270,8 @@ class ReportService {
     final netCashFlow = totalCashInflow - totalCashOutflow;
 
     // Build Payment Method Stats List
-    final totalPaymentsReceived = paymentMethodAggregators.values
-        .fold(0.0, (sum, pm) => sum + pm.amount);
+    final totalPaymentsReceived =
+        paymentMethodAggregators.values.fold(0.0, (sum, pm) => sum + pm.amount);
     final paymentMethods = paymentMethodAggregators.values.map((pm) {
       final percentage = totalPaymentsReceived > 0
           ? (pm.amount / totalPaymentsReceived) * 100
@@ -280,22 +286,12 @@ class ReportService {
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
     // ─── Customer Receivables ──────────────────────────────────────────────
-    final Map<String, double> customerSalesDues = {};
-    for (final sale in allSales) {
-      if (sale.saleType == SaleType.credit &&
-          sale.customerUuid != null &&
-          sale.customerUuid!.isNotEmpty) {
-        final remaining = sale.totalAmount - sale.amountReceived;
-        customerSalesDues[sale.customerUuid!] =
-            (customerSalesDues[sale.customerUuid!] ?? 0.0) + remaining;
-      }
-    }
-
+    // Customer balances are cached fields, so fetch them via DBService to
+    // force reconciliation from active Sale and CustomerPayment records first.
     double totalCustomerReceivables = 0.0;
     final List<CustomerReportItem> allCustomerReports = [];
     for (final customer in allCustomers) {
-      final currentDue =
-          (customerSalesDues[customer.uuid] ?? 0.0).clamp(0.0, double.infinity);
+      final currentDue = customer.pendingDues;
       if (currentDue > 0) {
         totalCustomerReceivables += currentDue;
       }
@@ -311,9 +307,11 @@ class ReportService {
       ));
     }
 
-    final topCustomersByRevenue = List<CustomerReportItem>.from(allCustomerReports)
-      ..sort((a, b) => b.totalBilled.compareTo(a.totalBilled));
-    final topCustomersByOutstanding = List<CustomerReportItem>.from(allCustomerReports)
+    final topCustomersByRevenue =
+        List<CustomerReportItem>.from(allCustomerReports)
+          ..sort((a, b) => b.totalBilled.compareTo(a.totalBilled));
+    final topCustomersByOutstanding = List<CustomerReportItem>.from(
+        allCustomerReports)
       ..sort((a, b) => b.currentOutstanding.compareTo(a.currentOutstanding));
 
     // ─── Supplier Payables ─────────────────────────────────────────────────
@@ -362,10 +360,12 @@ class ReportService {
       ));
     }
 
-    final topSuppliersByPurchases = List<SupplierReportItem>.from(allSupplierReports)
-      ..sort((a, b) => b.totalPurchased.compareTo(a.totalPurchased));
-    final topSuppliersByOutstanding = List<SupplierReportItem>.from(allSupplierReports)
-      ..sort((a, b) => b.currentBalanceDue.compareTo(a.currentBalanceDue));
+    final topSuppliersByPurchases =
+        List<SupplierReportItem>.from(allSupplierReports)
+          ..sort((a, b) => b.totalPurchased.compareTo(a.totalPurchased));
+    final topSuppliersByOutstanding =
+        List<SupplierReportItem>.from(allSupplierReports)
+          ..sort((a, b) => b.currentBalanceDue.compareTo(a.currentBalanceDue));
 
     final netWorkingCapitalPosition =
         totalCustomerReceivables - totalSupplierPayables;
@@ -408,7 +408,8 @@ class ReportService {
     }
 
     // ─── Product Rankings ──────────────────────────────────────────────────
-    final List<ProductReportItem> productReportList = productStats.values.map((p) {
+    final List<ProductReportItem> productReportList =
+        productStats.values.map((p) {
       final margin = p.revenue > 0 ? (p.profit / p.revenue) * 100 : 0.0;
       return ProductReportItem(
         productUuid: p.productUuid,
@@ -426,14 +427,16 @@ class ReportService {
       ..sort((a, b) => b.revenue.compareTo(a.revenue));
     final topProductsByProfit = List<ProductReportItem>.from(productReportList)
       ..sort((a, b) => b.profit.compareTo(a.profit));
-    final topProductsByQuantity = List<ProductReportItem>.from(productReportList)
-      ..sort((a, b) => b.quantitySold.compareTo(a.quantitySold));
+    final topProductsByQuantity =
+        List<ProductReportItem>.from(productReportList)
+          ..sort((a, b) => b.quantitySold.compareTo(a.quantitySold));
 
     // Dead / slow products in inventory with 0 sales in period
     final activeProductUuids = productStats.keys.toSet();
     final List<ProductReportItem> deadOrLowMovingProducts = [];
     for (final p in allProducts) {
-      if (!activeProductUuids.contains(p.uuid) && !activeProductUuids.contains(p.name)) {
+      if (!activeProductUuids.contains(p.uuid) &&
+          !activeProductUuids.contains(p.name)) {
         deadOrLowMovingProducts.add(ProductReportItem(
           productUuid: p.uuid,
           productName: p.name,
@@ -446,7 +449,8 @@ class ReportService {
         ));
       }
     }
-    deadOrLowMovingProducts.sort((a, b) => b.currentStock.compareTo(a.currentStock));
+    deadOrLowMovingProducts
+        .sort((a, b) => b.currentStock.compareTo(a.currentStock));
 
     return BusinessReportData(
       startDate: startDate,

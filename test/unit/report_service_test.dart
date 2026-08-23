@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:ssma/models/customer.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/godown_item.dart';
@@ -167,8 +167,6 @@ void main() {
         deviceId: 'test-dev',
       );
       await DBService.addCustomerPayment(custPayment);
-      creditSale.amountReceived += 200.0;
-      await DBService.updateSale(creditSale);
 
       // 8. Record Purchase from Supplier
       final purchase = Purchase.create(
@@ -219,11 +217,11 @@ void main() {
       expect(report.profitMarginPercentage, closeTo((600 / 2100) * 100, 0.01));
 
       // Verify Cash Flow
-      // Inflow: 1200 (sale 1) + 600 (sale 2) + 200 (customer payment) = 2000
-      expect(report.totalCashInflow, 2000.0);
+      // Inflow: 1200 (sale 1) + 400 (sale 2 down payment) + 200 (customer payment) = 1800
+      expect(report.totalCashInflow, 1800.0);
       // Outflow: 1000 (supplier payment)
       expect(report.totalCashOutflow, 1000.0);
-      expect(report.netCashFlow, 1000.0);
+      expect(report.netCashFlow, 800.0);
 
       // Verify Working Capital
       // Customer Receivables: 500 - 200 = 300

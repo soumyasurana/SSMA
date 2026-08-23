@@ -91,7 +91,7 @@ const PeerStateSchema = CollectionSchema(
   getId: _peerStateGetId,
   getLinks: _peerStateGetLinks,
   attach: _peerStateAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _peerStateEstimateSize(

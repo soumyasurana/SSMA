@@ -84,7 +84,7 @@ const SupplierPaymentSchema = CollectionSchema(
   getId: _supplierPaymentGetId,
   getLinks: _supplierPaymentGetLinks,
   attach: _supplierPaymentAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _supplierPaymentEstimateSize(

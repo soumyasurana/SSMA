@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:isar/isar.dart';
-import 'package:ssma/models/customer.dart';
+import 'package:isar_community/isar.dart';
 import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/product.dart';
 import 'package:ssma/models/purchase.dart';
@@ -37,8 +36,8 @@ class DashboardService {
         final currentWeekday = now.weekday; // 1 = Mon, 7 = Sun
         startDate = DateTime(now.year, now.month, now.day)
             .subtract(Duration(days: currentWeekday - 1));
-        endDate = startDate
-            .add(const Duration(days: 6, hours: 23, minutes: 59, seconds: 59, milliseconds: 999));
+        endDate = startDate.add(const Duration(
+            days: 6, hours: 23, minutes: 59, seconds: 59, milliseconds: 999));
         prevStartDate = startDate.subtract(const Duration(days: 7));
         prevEndDate = endDate.subtract(const Duration(days: 7));
         break;
@@ -57,8 +56,10 @@ class DashboardService {
         break;
       case DashboardDateRange.custom:
         if (customRange != null) {
-          startDate = DateTime(customRange.start.year, customRange.start.month, customRange.start.day);
-          endDate = DateTime(customRange.end.year, customRange.end.month, customRange.end.day, 23, 59, 59, 999);
+          startDate = DateTime(customRange.start.year, customRange.start.month,
+              customRange.start.day);
+          endDate = DateTime(customRange.end.year, customRange.end.month,
+              customRange.end.day, 23, 59, 59, 999);
         } else {
           startDate = now.subtract(const Duration(days: 30));
           endDate = now;
@@ -103,28 +104,20 @@ class DashboardService {
         .findAll();
 
     // 3. Fetch independent metrics (customers, products, suppliers)
-    final allProducts = await isar.products.filter().deletedEqualTo(false).findAll();
+    final allProducts =
+        await isar.products.filter().deletedEqualTo(false).findAll();
     final allProductsIncludingDeleted = await isar.products.where().findAll();
-    final allCustomers = await isar.customers.filter().deletedEqualTo(false).findAll();
-    final allSuppliers = await isar.suppliers.filter().deletedEqualTo(false).findAll();
+    final allCustomers = await DBService.getCustomers();
+    final allSuppliers =
+        await isar.suppliers.filter().deletedEqualTo(false).findAll();
 
-    // 4. Compute Receivables
-    final allSalesList = await isar.sales.filter().deletedEqualTo(false).findAll();
-    final Map<String, double> customerSalesDues = {};
-    for (final sale in allSalesList) {
-      if (sale.saleType == SaleType.credit && sale.customerUuid != null && sale.customerUuid!.isNotEmpty) {
-        final remaining = sale.totalAmount - sale.amountReceived;
-        customerSalesDues[sale.customerUuid!] =
-            (customerSalesDues[sale.customerUuid!] ?? 0.0) + remaining;
-      }
-    }
-
+    // 4. Compute Receivables from reconciled transaction-derived balances.
     double receivablesTotal = 0.0;
     int receivablesCustomerCount = 0;
     final List<OutstandingCustomerData> customerOutstandings = [];
 
     for (final customer in allCustomers) {
-      final dues = (customerSalesDues[customer.uuid] ?? 0.0).clamp(0.0, double.infinity);
+      final dues = customer.pendingDues;
       if (dues > 0) {
         receivablesTotal += dues;
         receivablesCustomerCount++;
@@ -136,22 +129,27 @@ class DashboardService {
       }
     }
     // Sort customer outstandings descending
-    customerOutstandings.sort((a, b) => b.outstandingAmount.compareTo(a.outstandingAmount));
+    customerOutstandings
+        .sort((a, b) => b.outstandingAmount.compareTo(a.outstandingAmount));
     final topReceivables = customerOutstandings.take(5).toList();
 
     // 5. Compute Payables
     // Balance per supplier = sum(purchases) - sum(payments)
-    final allPurchasesList = await isar.purchases.filter().deletedEqualTo(false).findAll();
-    final allSupplierPayments = await isar.supplierPayments.filter().deletedEqualTo(false).findAll();
+    final allPurchasesList =
+        await isar.purchases.filter().deletedEqualTo(false).findAll();
+    final allSupplierPayments =
+        await isar.supplierPayments.filter().deletedEqualTo(false).findAll();
 
     final Map<String, double> supplierPurchasesSum = {};
     final Map<String, double> supplierPaymentsSum = {};
 
     for (final p in allPurchasesList) {
-      supplierPurchasesSum[p.supplierUuid] = (supplierPurchasesSum[p.supplierUuid] ?? 0.0) + p.totalAmount;
+      supplierPurchasesSum[p.supplierUuid] =
+          (supplierPurchasesSum[p.supplierUuid] ?? 0.0) + p.totalAmount;
     }
     for (final pm in allSupplierPayments) {
-      supplierPaymentsSum[pm.supplierUuid] = (supplierPaymentsSum[pm.supplierUuid] ?? 0.0) + pm.amount;
+      supplierPaymentsSum[pm.supplierUuid] =
+          (supplierPaymentsSum[pm.supplierUuid] ?? 0.0) + pm.amount;
     }
 
     double payablesTotal = 0.0;
@@ -175,7 +173,8 @@ class DashboardService {
         ));
       }
     }
-    supplierOutstandings.sort((a, b) => b.outstandingAmount.compareTo(a.outstandingAmount));
+    supplierOutstandings
+        .sort((a, b) => b.outstandingAmount.compareTo(a.outstandingAmount));
     final topPayables = supplierOutstandings.take(5).toList();
 
     // 6. Compute Inventory Overview
@@ -201,7 +200,8 @@ class DashboardService {
         ));
       }
     }
-    lowStockProducts.sort((a, b) => a.currentQuantity.compareTo(b.currentQuantity));
+    lowStockProducts
+        .sort((a, b) => a.currentQuantity.compareTo(b.currentQuantity));
 
     // 7. Process sales in current range
     double totalSales = 0.0;
@@ -228,18 +228,22 @@ class DashboardService {
         // Fallback to product model purchase price if item purchasePrice is zero
         double costPrice = item.purchasePrice;
         if (costPrice == 0.0) {
-          final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
+          final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid,
+              orElse: () => Product());
           costPrice = prod.purchasePrice;
         }
 
         saleCost += (costPrice * item.quantity);
 
         // Top product performance analytics
-        topProductsQty[item.productName] = (topProductsQty[item.productName] ?? 0) + item.quantity;
-        topProductsRevenue[item.productName] = (topProductsRevenue[item.productName] ?? 0.0) + item.total;
-        
+        topProductsQty[item.productName] =
+            (topProductsQty[item.productName] ?? 0) + item.quantity;
+        topProductsRevenue[item.productName] =
+            (topProductsRevenue[item.productName] ?? 0.0) + item.total;
+
         final itemProfit = item.total - (costPrice * item.quantity);
-        topProductsProfit[item.productName] = (topProductsProfit[item.productName] ?? 0.0) + itemProfit;
+        topProductsProfit[item.productName] =
+            (topProductsProfit[item.productName] ?? 0.0) + itemProfit;
       }
       totalCost += saleCost;
       final saleProfit = sale.totalAmount - saleCost;
@@ -252,39 +256,51 @@ class DashboardService {
       if (meta.payments.isNotEmpty) {
         for (final p in meta.payments) {
           final methodNormalized = p.method.toLowerCase().trim();
-          paymentMethodsSum[methodNormalized] = (paymentMethodsSum[methodNormalized] ?? 0.0) + p.amount;
+          paymentMethodsSum[methodNormalized] =
+              (paymentMethodsSum[methodNormalized] ?? 0.0) + p.amount;
         }
       } else {
         // Fallback to saleType
         if (sale.amountReceived > 0) {
           const methodNormalized = 'cash';
-          paymentMethodsSum[methodNormalized] = (paymentMethodsSum[methodNormalized] ?? 0.0) + sale.amountReceived;
+          paymentMethodsSum[methodNormalized] =
+              (paymentMethodsSum[methodNormalized] ?? 0.0) +
+                  sale.amountReceived;
         }
       }
     }
 
     grossProfit = totalSales - totalCost;
-    final profitMargin = totalSales > 0 ? (grossProfit / totalSales) * 100 : 0.0;
+    final profitMargin =
+        totalSales > 0 ? (grossProfit / totalSales) * 100 : 0.0;
     final averageBillValue = salesCount > 0 ? totalSales / salesCount : 0.0;
 
-    double totalPurchases = currentPurchases.fold(0.0, (sum, p) => sum + p.totalAmount);
+    double totalPurchases =
+        currentPurchases.fold(0.0, (sum, p) => sum + p.totalAmount);
     int purchasesCount = currentPurchases.length;
 
     // Normalizing payment methods to UI names
     cashReceived = paymentMethodsSum['cash'] ?? 0.0;
     final upiReceivedSum = paymentMethodsSum['upi'] ?? 0.0;
-    final upiDigitalSum = upiReceivedSum + (paymentMethodsSum['digital'] ?? 0.0) + (paymentMethodsSum['card'] ?? 0.0);
+    final upiDigitalSum = upiReceivedSum +
+        (paymentMethodsSum['digital'] ?? 0.0) +
+        (paymentMethodsSum['card'] ?? 0.0);
     final bankReceivedSum = paymentMethodsSum['bank'] ?? 0.0;
-    
+
     // Remaining other payment methods
     double otherReceivedSum = 0.0;
     paymentMethodsSum.forEach((key, val) {
-      if (key != 'cash' && key != 'upi' && key != 'digital' && key != 'card' && key != 'bank') {
+      if (key != 'cash' &&
+          key != 'upi' &&
+          key != 'digital' &&
+          key != 'card' &&
+          key != 'bank') {
         otherReceivedSum += val;
       }
     });
 
-    final double totalCollections = cashReceived + upiDigitalSum + bankReceivedSum + otherReceivedSum;
+    final double totalCollections =
+        cashReceived + upiDigitalSum + bankReceivedSum + otherReceivedSum;
     final List<PaymentMethodBreakdown> paymentBreakdown = [];
     if (totalCollections > 0) {
       paymentBreakdown.add(PaymentMethodBreakdown(
@@ -311,9 +327,12 @@ class DashboardService {
       }
     } else {
       // Empty payment breakdown defaults
-      paymentBreakdown.add(PaymentMethodBreakdown(method: 'Cash', amount: 0, percentage: 0));
-      paymentBreakdown.add(PaymentMethodBreakdown(method: 'UPI / Digital', amount: 0, percentage: 0));
-      paymentBreakdown.add(PaymentMethodBreakdown(method: 'Bank Transfer', amount: 0, percentage: 0));
+      paymentBreakdown.add(
+          PaymentMethodBreakdown(method: 'Cash', amount: 0, percentage: 0));
+      paymentBreakdown.add(PaymentMethodBreakdown(
+          method: 'UPI / Digital', amount: 0, percentage: 0));
+      paymentBreakdown.add(PaymentMethodBreakdown(
+          method: 'Bank Transfer', amount: 0, percentage: 0));
     }
 
     // 8. Top products ranking
@@ -344,12 +363,15 @@ class DashboardService {
         for (final item in sale.items) {
           double costPrice = item.purchasePrice;
           if (costPrice == 0.0) {
-            final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
+            final prod = allProducts.firstWhere(
+                (p) => p.uuid == item.productUuid,
+                orElse: () => Product());
             costPrice = prod.purchasePrice;
           }
           saleCost += (costPrice * item.quantity);
         }
-        hourProfit[hr] = (hourProfit[hr] ?? 0.0) + (sale.totalAmount - saleCost);
+        hourProfit[hr] =
+            (hourProfit[hr] ?? 0.0) + (sale.totalAmount - saleCost);
       }
 
       for (int h = 0; h < 24; h += 2) {
@@ -362,12 +384,26 @@ class DashboardService {
                     : '${h - 12} PM';
         final val = (hourSales[h] ?? 0.0) + (hourSales[h + 1] ?? 0.0);
         final prf = (hourProfit[h] ?? 0.0) + (hourProfit[h + 1] ?? 0.0);
-        salesTrend.add(DashboardChartPoint(date: startDate.add(Duration(hours: h)), label: hrText, value: val));
-        profitTrend.add(DashboardChartPoint(date: startDate.add(Duration(hours: h)), label: hrText, value: prf));
+        salesTrend.add(DashboardChartPoint(
+            date: startDate.add(Duration(hours: h)),
+            label: hrText,
+            value: val));
+        profitTrend.add(DashboardChartPoint(
+            date: startDate.add(Duration(hours: h)),
+            label: hrText,
+            value: prf));
       }
     } else if (range == DashboardDateRange.thisWeek) {
       // 7 days (Mon -> Sun)
-      final List<String> daysName = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      final List<String> daysName = [
+        'Mon',
+        'Tue',
+        'Wed',
+        'Thu',
+        'Fri',
+        'Sat',
+        'Sun'
+      ];
       final Map<int, double> daySales = {};
       final Map<int, double> dayProfit = {};
 
@@ -375,17 +411,20 @@ class DashboardService {
         final dayIndex = sale.date.weekday - 1; // 0 = Mon, 6 = Sun
         if (dayIndex >= 0 && dayIndex < 7) {
           daySales[dayIndex] = (daySales[dayIndex] ?? 0.0) + sale.totalAmount;
-          
+
           double saleCost = 0.0;
           for (final item in sale.items) {
             double costPrice = item.purchasePrice;
             if (costPrice == 0.0) {
-              final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
+              final prod = allProducts.firstWhere(
+                  (p) => p.uuid == item.productUuid,
+                  orElse: () => Product());
               costPrice = prod.purchasePrice;
             }
             saleCost += (costPrice * item.quantity);
           }
-          dayProfit[dayIndex] = (dayProfit[dayIndex] ?? 0.0) + (sale.totalAmount - saleCost);
+          dayProfit[dayIndex] =
+              (dayProfit[dayIndex] ?? 0.0) + (sale.totalAmount - saleCost);
         }
       }
 
@@ -415,7 +454,9 @@ class DashboardService {
         for (final item in sale.items) {
           double costPrice = item.purchasePrice;
           if (costPrice == 0.0) {
-            final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
+            final prod = allProducts.firstWhere(
+                (p) => p.uuid == item.productUuid,
+                orElse: () => Product());
             costPrice = prod.purchasePrice;
           }
           saleCost += (costPrice * item.quantity);
@@ -437,7 +478,20 @@ class DashboardService {
       }
     } else if (range == DashboardDateRange.thisYear) {
       // Jan -> Dec
-      final List<String> monthsName = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      final List<String> monthsName = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec'
+      ];
       final Map<int, double> monthSales = {};
       final Map<int, double> monthProfit = {};
 
@@ -449,12 +503,15 @@ class DashboardService {
         for (final item in sale.items) {
           double costPrice = item.purchasePrice;
           if (costPrice == 0.0) {
-            final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
+            final prod = allProducts.firstWhere(
+                (p) => p.uuid == item.productUuid,
+                orElse: () => Product());
             costPrice = prod.purchasePrice;
           }
           saleCost += (costPrice * item.quantity);
         }
-        monthProfit[m] = (monthProfit[m] ?? 0.0) + (sale.totalAmount - saleCost);
+        monthProfit[m] =
+            (monthProfit[m] ?? 0.0) + (sale.totalAmount - saleCost);
       }
 
       for (int m = 1; m <= 12; m++) {
@@ -479,22 +536,37 @@ class DashboardService {
         for (final sale in currentSales) {
           final hr = sale.date.hour;
           hourSales[hr] = (hourSales[hr] ?? 0.0) + sale.totalAmount;
-          
+
           double saleCost = 0.0;
           for (final item in sale.items) {
             double costPrice = item.purchasePrice;
             if (costPrice == 0.0) {
-              final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
+              final prod = allProducts.firstWhere(
+                  (p) => p.uuid == item.productUuid,
+                  orElse: () => Product());
               costPrice = prod.purchasePrice;
             }
             saleCost += (costPrice * item.quantity);
           }
-          hourProfit[hr] = (hourProfit[hr] ?? 0.0) + (sale.totalAmount - saleCost);
+          hourProfit[hr] =
+              (hourProfit[hr] ?? 0.0) + (sale.totalAmount - saleCost);
         }
         for (int h = 0; h < 24; h += 2) {
-          final hrText = h == 0 ? '12 AM' : h < 12 ? '$h AM' : h == 12 ? '12 PM' : '${h - 12} PM';
-          salesTrend.add(DashboardChartPoint(date: startDate.add(Duration(hours: h)), label: hrText, value: (hourSales[h] ?? 0.0) + (hourSales[h + 1] ?? 0.0)));
-          profitTrend.add(DashboardChartPoint(date: startDate.add(Duration(hours: h)), label: hrText, value: (hourProfit[h] ?? 0.0) + (hourProfit[h + 1] ?? 0.0)));
+          final hrText = h == 0
+              ? '12 AM'
+              : h < 12
+                  ? '$h AM'
+                  : h == 12
+                      ? '12 PM'
+                      : '${h - 12} PM';
+          salesTrend.add(DashboardChartPoint(
+              date: startDate.add(Duration(hours: h)),
+              label: hrText,
+              value: (hourSales[h] ?? 0.0) + (hourSales[h + 1] ?? 0.0)));
+          profitTrend.add(DashboardChartPoint(
+              date: startDate.add(Duration(hours: h)),
+              label: hrText,
+              value: (hourProfit[h] ?? 0.0) + (hourProfit[h + 1] ?? 0.0)));
         }
       } else if (diffDays <= 14) {
         // Day by day with date labels (e.g. 24 Aug)
@@ -502,22 +574,41 @@ class DashboardService {
         for (int i = 0; i <= diffDays; i++) {
           final targetDate = startDate.add(Duration(days: i));
           final salesSum = currentSales
-              .where((s) => s.date.year == targetDate.year && s.date.month == targetDate.month && s.date.day == targetDate.day)
+              .where((s) =>
+                  s.date.year == targetDate.year &&
+                  s.date.month == targetDate.month &&
+                  s.date.day == targetDate.day)
               .fold(0.0, (sum, s) => sum + s.totalAmount);
 
           final profitSum = currentSales
-              .where((s) => s.date.year == targetDate.year && s.date.month == targetDate.month && s.date.day == targetDate.day)
-              .fold(0.0, (sum, s) => sum + s.totalAmount - s.items.fold(0.0, (isum, item) {
-                double cp = item.purchasePrice;
-                if (cp == 0.0) {
-                  final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
-                  cp = prod.purchasePrice;
-                }
-                return isum + (cp * item.quantity);
-              }));
+              .where((s) =>
+                  s.date.year == targetDate.year &&
+                  s.date.month == targetDate.month &&
+                  s.date.day == targetDate.day)
+              .fold(
+                  0.0,
+                  (sum, s) =>
+                      sum +
+                      s.totalAmount -
+                      s.items.fold(0.0, (isum, item) {
+                        double cp = item.purchasePrice;
+                        if (cp == 0.0) {
+                          final prod = allProducts.firstWhere(
+                              (p) => p.uuid == item.productUuid,
+                              orElse: () => Product());
+                          cp = prod.purchasePrice;
+                        }
+                        return isum + (cp * item.quantity);
+                      }));
 
-          salesTrend.add(DashboardChartPoint(date: targetDate, label: formatter.format(targetDate), value: salesSum));
-          profitTrend.add(DashboardChartPoint(date: targetDate, label: formatter.format(targetDate), value: profitSum));
+          salesTrend.add(DashboardChartPoint(
+              date: targetDate,
+              label: formatter.format(targetDate),
+              value: salesSum));
+          profitTrend.add(DashboardChartPoint(
+              date: targetDate,
+              label: formatter.format(targetDate),
+              value: profitSum));
         }
       } else {
         // Group by weekly buckets or monthly buckets
@@ -525,7 +616,8 @@ class DashboardService {
         final intervalDays = (diffDays / 8).ceil();
         final formatter = DateFormat('d MMM');
         for (int i = 0; i < 8; i++) {
-          final targetStartDate = startDate.add(Duration(days: i * intervalDays));
+          final targetStartDate =
+              startDate.add(Duration(days: i * intervalDays));
           var targetEndDate = DateTime(
             targetStartDate.year,
             targetStartDate.month,
@@ -540,28 +632,41 @@ class DashboardService {
           }
 
           final salesSum = currentSales
-              .where((s) => !s.date.isBefore(targetStartDate) && !s.date.isAfter(targetEndDate))
+              .where((s) =>
+                  !s.date.isBefore(targetStartDate) &&
+                  !s.date.isAfter(targetEndDate))
               .fold(0.0, (sum, s) => sum + s.totalAmount);
 
           final profitSum = currentSales
-              .where((s) => !s.date.isBefore(targetStartDate) && !s.date.isAfter(targetEndDate))
-              .fold(0.0, (sum, s) => sum + s.totalAmount - s.items.fold(0.0, (isum, item) {
-                double cp = item.purchasePrice;
-                if (cp == 0.0) {
-                  final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
-                  cp = prod.purchasePrice;
-                }
-                return isum + (cp * item.quantity);
-              }));
+              .where((s) =>
+                  !s.date.isBefore(targetStartDate) &&
+                  !s.date.isAfter(targetEndDate))
+              .fold(
+                  0.0,
+                  (sum, s) =>
+                      sum +
+                      s.totalAmount -
+                      s.items.fold(0.0, (isum, item) {
+                        double cp = item.purchasePrice;
+                        if (cp == 0.0) {
+                          final prod = allProducts.firstWhere(
+                              (p) => p.uuid == item.productUuid,
+                              orElse: () => Product());
+                          cp = prod.purchasePrice;
+                        }
+                        return isum + (cp * item.quantity);
+                      }));
 
           salesTrend.add(DashboardChartPoint(
             date: targetStartDate,
-            label: '${formatter.format(targetStartDate)}-${formatter.format(targetEndDate)}',
+            label:
+                '${formatter.format(targetStartDate)}-${formatter.format(targetEndDate)}',
             value: salesSum,
           ));
           profitTrend.add(DashboardChartPoint(
             date: targetStartDate,
-            label: '${formatter.format(targetStartDate)}-${formatter.format(targetEndDate)}',
+            label:
+                '${formatter.format(targetStartDate)}-${formatter.format(targetEndDate)}',
             value: profitSum,
           ));
         }
@@ -572,31 +677,61 @@ class DashboardService {
     double? salesChangePercentage;
     double? profitChangePercentage;
 
-    double prevSalesTotal = prevSales.fold(0.0, (sum, s) => sum + s.totalAmount);
-    double prevProfitTotal = prevSales.fold(0.0, (sum, s) => sum + s.totalAmount - s.items.fold(0.0, (isum, item) {
-      double cp = item.purchasePrice;
-      if (cp == 0.0) {
-        final prod = allProducts.firstWhere((p) => p.uuid == item.productUuid, orElse: () => Product());
-        cp = prod.purchasePrice;
-      }
-      return isum + (cp * item.quantity);
-    }));
+    double prevSalesTotal =
+        prevSales.fold(0.0, (sum, s) => sum + s.totalAmount);
+    double prevProfitTotal = prevSales.fold(
+        0.0,
+        (sum, s) =>
+            sum +
+            s.totalAmount -
+            s.items.fold(0.0, (isum, item) {
+              double cp = item.purchasePrice;
+              if (cp == 0.0) {
+                final prod = allProducts.firstWhere(
+                    (p) => p.uuid == item.productUuid,
+                    orElse: () => Product());
+                cp = prod.purchasePrice;
+              }
+              return isum + (cp * item.quantity);
+            }));
 
     if (prevSalesTotal > 0) {
-      salesChangePercentage = ((totalSales - prevSalesTotal) / prevSalesTotal) * 100;
+      salesChangePercentage =
+          ((totalSales - prevSalesTotal) / prevSalesTotal) * 100;
     }
     if (prevProfitTotal > 0) {
-      profitChangePercentage = ((grossProfit - prevProfitTotal) / prevProfitTotal) * 100;
+      profitChangePercentage =
+          ((grossProfit - prevProfitTotal) / prevProfitTotal) * 100;
     }
 
     // 11. unified Recent transactions list
     final List<RecentTransactionData> recentTransactions = [];
 
     // Load actual recent items
-    final recentSales = await isar.sales.filter().deletedEqualTo(false).sortByDateDesc().limit(10).findAll();
-    final recentPurchases = await isar.purchases.filter().deletedEqualTo(false).sortByDateDesc().limit(10).findAll();
-    final recentCustomerPayments = await isar.customerPayments.filter().deletedEqualTo(false).sortByDateDesc().limit(10).findAll();
-    final recentSupplierPayments = await isar.supplierPayments.filter().deletedEqualTo(false).sortByDateDesc().limit(10).findAll();
+    final recentSales = await isar.sales
+        .filter()
+        .deletedEqualTo(false)
+        .sortByDateDesc()
+        .limit(10)
+        .findAll();
+    final recentPurchases = await isar.purchases
+        .filter()
+        .deletedEqualTo(false)
+        .sortByDateDesc()
+        .limit(10)
+        .findAll();
+    final recentCustomerPayments = await isar.customerPayments
+        .filter()
+        .deletedEqualTo(false)
+        .sortByDateDesc()
+        .limit(10)
+        .findAll();
+    final recentSupplierPayments = await isar.supplierPayments
+        .filter()
+        .deletedEqualTo(false)
+        .sortByDateDesc()
+        .limit(10)
+        .findAll();
 
     final supplierNameMap = {for (var s in allSuppliers) s.uuid: s.name};
 
@@ -689,7 +824,8 @@ class DashboardService {
 
     if (receivablesTotal > 15000) {
       alerts.add(DashboardAlert(
-        message: 'Total receivables are high: ${NumberFormat.simpleCurrency(locale: 'en_IN', decimalDigits: 0).format(receivablesTotal)} pending.',
+        message:
+            'Total receivables are high: ${NumberFormat.simpleCurrency(locale: 'en_IN', decimalDigits: 0).format(receivablesTotal)} pending.',
         severity: AlertSeverity.warning,
         actionLabel: 'Collect',
       ));
@@ -697,7 +833,8 @@ class DashboardService {
 
     if (unusualZeroProfitSales > 0) {
       alerts.add(DashboardAlert(
-        message: 'Detected $unusualZeroProfitSales sales with zero or negative gross profit.',
+        message:
+            'Detected $unusualZeroProfitSales sales with zero or negative gross profit.',
         severity: AlertSeverity.info,
         actionLabel: 'Review',
       ));

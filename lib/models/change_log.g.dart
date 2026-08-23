@@ -179,7 +179,7 @@ const ChangeLogSchema = CollectionSchema(
   getId: _changeLogGetId,
   getLinks: _changeLogGetLinks,
   attach: _changeLogAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _changeLogEstimateSize(

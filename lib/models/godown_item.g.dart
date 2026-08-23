@@ -160,7 +160,7 @@ const GodownItemSchema = CollectionSchema(
   getId: _godownItemGetId,
   getLinks: _godownItemGetLinks,
   attach: _godownItemAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _godownItemEstimateSize(

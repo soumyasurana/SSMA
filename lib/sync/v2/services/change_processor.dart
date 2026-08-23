@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 
 import 'package:ssma/models/product.dart';
 import 'package:ssma/models/customer.dart';
@@ -11,6 +11,7 @@ import 'package:ssma/models/customer_payment.dart';
 import 'package:ssma/models/supplier_payment.dart';
 import 'package:ssma/models/godown_item.dart';
 import 'package:ssma/models/godown_movement.dart';
+import 'package:ssma/services/db_service.dart';
 
 import '../models/sync_change_log.dart';
 import 'conflict_resolver.dart';
@@ -228,6 +229,13 @@ class ChangeProcessor {
       await journal.putRemoteEntry(storedJournalEntry);
     });
 
+    if (result == _ApplyResult.applied &&
+        (change.entityType == 'Customer' ||
+            change.entityType == 'Sale' ||
+            change.entityType == 'CustomerPayment')) {
+      await DBService.reconcileAllCustomerAccounts();
+    }
+
     return result;
   }
 }
@@ -271,6 +279,10 @@ class ProductSyncHandler implements EntitySyncHandler {
       return true;
     }
 
+    if (existing.deleted && !incoming.deleted) {
+      return false;
+    }
+
     if (conflictResolver.shouldApplyIncoming(_makeCtx(
         entityType,
         incoming.uuid,
@@ -290,8 +302,6 @@ class ProductSyncHandler implements EntitySyncHandler {
   }
 }
 
-// ── Customer ─────────────────────────────────────────────────────────────────
-
 class CustomerSyncHandler implements EntitySyncHandler {
   @override
   String get entityType => 'Customer';
@@ -308,6 +318,8 @@ class CustomerSyncHandler implements EntitySyncHandler {
         await isar.customers.filter().uuidEqualTo(incoming.uuid).findFirst();
 
     if (existing == null) {
+      // Brand new customer — apply as-is. The local reconciliation pass after
+      // sync will correct pendingDues/advanceBalance if needed.
       incoming.isSynced = true;
       await isar.customers.put(incoming);
       return true;
@@ -323,6 +335,10 @@ class CustomerSyncHandler implements EntitySyncHandler {
       return true;
     }
 
+    if (existing.deleted && !incoming.deleted) {
+      return false;
+    }
+
     if (conflictResolver.shouldApplyIncoming(_makeCtx(
         entityType,
         incoming.uuid,
@@ -332,9 +348,16 @@ class CustomerSyncHandler implements EntitySyncHandler {
         existing.updatedAt.millisecondsSinceEpoch,
         incoming.deviceId,
         existing.deviceId))) {
+      // IMPORTANT: pendingDues and advanceBalance are *derived* fields that
+      // are always computed from actual Sale and CustomerPayment records.
+      // Never overwrite locally-computed balances with remote values — the
+      // remote may have a different (stale) view of these cached totals.
+      // The post-sync reconciliation pass will correct them from transactions.
       incoming
         ..isarId = existing.isarId
-        ..isSynced = true;
+        ..isSynced = true
+        ..pendingDues = existing.pendingDues
+        ..advanceBalance = existing.advanceBalance;
       await isar.customers.put(incoming);
       return true;
     }
@@ -620,10 +643,8 @@ class GodownItemSyncHandler implements EntitySyncHandler {
     Isar isar,
   ) async {
     final incoming = GodownItem.fromJson(payload);
-    final existing = await isar.godownItems
-        .filter()
-        .uuidEqualTo(incoming.uuid)
-        .findFirst();
+    final existing =
+        await isar.godownItems.filter().uuidEqualTo(incoming.uuid).findFirst();
 
     if (existing == null) {
       incoming.isSynced = true;

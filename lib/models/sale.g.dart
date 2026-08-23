@@ -111,7 +111,7 @@ const SaleSchema = CollectionSchema(
   getId: _saleGetId,
   getLinks: _saleGetLinks,
   attach: _saleAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _saleEstimateSize(

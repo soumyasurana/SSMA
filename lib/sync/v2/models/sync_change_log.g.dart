@@ -163,7 +163,7 @@ const SyncChangeLogSchema = CollectionSchema(
   getId: _syncChangeLogGetId,
   getLinks: _syncChangeLogGetLinks,
   attach: _syncChangeLogAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _syncChangeLogEstimateSize(

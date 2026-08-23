@@ -17,53 +17,58 @@ const CustomerSchema = CollectionSchema(
   name: r'Customer',
   id: -7623823084711604343,
   properties: {
-    r'createdAt': PropertySchema(
+    r'advanceBalance': PropertySchema(
       id: 0,
+      name: r'advanceBalance',
+      type: IsarType.double,
+    ),
+    r'createdAt': PropertySchema(
+      id: 1,
       name: r'createdAt',
       type: IsarType.dateTime,
     ),
     r'deleted': PropertySchema(
-      id: 1,
+      id: 2,
       name: r'deleted',
       type: IsarType.bool,
     ),
     r'deviceId': PropertySchema(
-      id: 2,
+      id: 3,
       name: r'deviceId',
       type: IsarType.string,
     ),
     r'isSynced': PropertySchema(
-      id: 3,
+      id: 4,
       name: r'isSynced',
       type: IsarType.bool,
     ),
     r'name': PropertySchema(
-      id: 4,
+      id: 5,
       name: r'name',
       type: IsarType.string,
     ),
     r'pendingDues': PropertySchema(
-      id: 5,
+      id: 6,
       name: r'pendingDues',
       type: IsarType.double,
     ),
     r'phone': PropertySchema(
-      id: 6,
+      id: 7,
       name: r'phone',
       type: IsarType.string,
     ),
     r'updatedAt': PropertySchema(
-      id: 7,
+      id: 8,
       name: r'updatedAt',
       type: IsarType.dateTime,
     ),
     r'uuid': PropertySchema(
-      id: 8,
+      id: 9,
       name: r'uuid',
       type: IsarType.string,
     ),
     r'version': PropertySchema(
-      id: 9,
+      id: 10,
       name: r'version',
       type: IsarType.long,
     )
@@ -79,7 +84,7 @@ const CustomerSchema = CollectionSchema(
   getId: _customerGetId,
   getLinks: _customerGetLinks,
   attach: _customerAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _customerEstimateSize(
@@ -106,16 +111,17 @@ void _customerSerialize(
   List<int> offsets,
   Map<Type, List<int>> allOffsets,
 ) {
-  writer.writeDateTime(offsets[0], object.createdAt);
-  writer.writeBool(offsets[1], object.deleted);
-  writer.writeString(offsets[2], object.deviceId);
-  writer.writeBool(offsets[3], object.isSynced);
-  writer.writeString(offsets[4], object.name);
-  writer.writeDouble(offsets[5], object.pendingDues);
-  writer.writeString(offsets[6], object.phone);
-  writer.writeDateTime(offsets[7], object.updatedAt);
-  writer.writeString(offsets[8], object.uuid);
-  writer.writeLong(offsets[9], object.version);
+  writer.writeDouble(offsets[0], object.advanceBalance);
+  writer.writeDateTime(offsets[1], object.createdAt);
+  writer.writeBool(offsets[2], object.deleted);
+  writer.writeString(offsets[3], object.deviceId);
+  writer.writeBool(offsets[4], object.isSynced);
+  writer.writeString(offsets[5], object.name);
+  writer.writeDouble(offsets[6], object.pendingDues);
+  writer.writeString(offsets[7], object.phone);
+  writer.writeDateTime(offsets[8], object.updatedAt);
+  writer.writeString(offsets[9], object.uuid);
+  writer.writeLong(offsets[10], object.version);
 }
 
 Customer _customerDeserialize(
@@ -125,17 +131,18 @@ Customer _customerDeserialize(
   Map<Type, List<int>> allOffsets,
 ) {
   final object = Customer();
-  object.createdAt = reader.readDateTime(offsets[0]);
-  object.deleted = reader.readBool(offsets[1]);
-  object.deviceId = reader.readString(offsets[2]);
-  object.isSynced = reader.readBool(offsets[3]);
+  object.advanceBalance = reader.readDouble(offsets[0]);
+  object.createdAt = reader.readDateTime(offsets[1]);
+  object.deleted = reader.readBool(offsets[2]);
+  object.deviceId = reader.readString(offsets[3]);
+  object.isSynced = reader.readBool(offsets[4]);
   object.isarId = id;
-  object.name = reader.readString(offsets[4]);
-  object.pendingDues = reader.readDouble(offsets[5]);
-  object.phone = reader.readStringOrNull(offsets[6]);
-  object.updatedAt = reader.readDateTime(offsets[7]);
-  object.uuid = reader.readString(offsets[8]);
-  object.version = reader.readLong(offsets[9]);
+  object.name = reader.readString(offsets[5]);
+  object.pendingDues = reader.readDouble(offsets[6]);
+  object.phone = reader.readStringOrNull(offsets[7]);
+  object.updatedAt = reader.readDateTime(offsets[8]);
+  object.uuid = reader.readString(offsets[9]);
+  object.version = reader.readLong(offsets[10]);
   return object;
 }
 
@@ -147,24 +154,26 @@ P _customerDeserializeProp<P>(
 ) {
   switch (propertyId) {
     case 0:
-      return (reader.readDateTime(offset)) as P;
-    case 1:
-      return (reader.readBool(offset)) as P;
-    case 2:
-      return (reader.readString(offset)) as P;
-    case 3:
-      return (reader.readBool(offset)) as P;
-    case 4:
-      return (reader.readString(offset)) as P;
-    case 5:
       return (reader.readDouble(offset)) as P;
-    case 6:
-      return (reader.readStringOrNull(offset)) as P;
-    case 7:
+    case 1:
       return (reader.readDateTime(offset)) as P;
-    case 8:
+    case 2:
+      return (reader.readBool(offset)) as P;
+    case 3:
       return (reader.readString(offset)) as P;
+    case 4:
+      return (reader.readBool(offset)) as P;
+    case 5:
+      return (reader.readString(offset)) as P;
+    case 6:
+      return (reader.readDouble(offset)) as P;
+    case 7:
+      return (reader.readStringOrNull(offset)) as P;
+    case 8:
+      return (reader.readDateTime(offset)) as P;
     case 9:
+      return (reader.readString(offset)) as P;
+    case 10:
       return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -262,6 +271,70 @@ extension CustomerQueryWhere on QueryBuilder<Customer, Customer, QWhereClause> {
 
 extension CustomerQueryFilter
     on QueryBuilder<Customer, Customer, QFilterCondition> {
+  QueryBuilder<Customer, Customer, QAfterFilterCondition> advanceBalanceEqualTo(
+    double value, {
+    double epsilon = Query.epsilon,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'advanceBalance',
+        value: value,
+        epsilon: epsilon,
+      ));
+    });
+  }
+
+  QueryBuilder<Customer, Customer, QAfterFilterCondition>
+      advanceBalanceGreaterThan(
+    double value, {
+    bool include = false,
+    double epsilon = Query.epsilon,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'advanceBalance',
+        value: value,
+        epsilon: epsilon,
+      ));
+    });
+  }
+
+  QueryBuilder<Customer, Customer, QAfterFilterCondition>
+      advanceBalanceLessThan(
+    double value, {
+    bool include = false,
+    double epsilon = Query.epsilon,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'advanceBalance',
+        value: value,
+        epsilon: epsilon,
+      ));
+    });
+  }
+
+  QueryBuilder<Customer, Customer, QAfterFilterCondition> advanceBalanceBetween(
+    double lower,
+    double upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    double epsilon = Query.epsilon,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'advanceBalance',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        epsilon: epsilon,
+      ));
+    });
+  }
+
   QueryBuilder<Customer, Customer, QAfterFilterCondition> createdAtEqualTo(
       DateTime value) {
     return QueryBuilder.apply(this, (query) {
@@ -1101,6 +1174,18 @@ extension CustomerQueryLinks
     on QueryBuilder<Customer, Customer, QFilterCondition> {}
 
 extension CustomerQuerySortBy on QueryBuilder<Customer, Customer, QSortBy> {
+  QueryBuilder<Customer, Customer, QAfterSortBy> sortByAdvanceBalance() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'advanceBalance', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Customer, Customer, QAfterSortBy> sortByAdvanceBalanceDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'advanceBalance', Sort.desc);
+    });
+  }
+
   QueryBuilder<Customer, Customer, QAfterSortBy> sortByCreatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'createdAt', Sort.asc);
@@ -1224,6 +1309,18 @@ extension CustomerQuerySortBy on QueryBuilder<Customer, Customer, QSortBy> {
 
 extension CustomerQuerySortThenBy
     on QueryBuilder<Customer, Customer, QSortThenBy> {
+  QueryBuilder<Customer, Customer, QAfterSortBy> thenByAdvanceBalance() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'advanceBalance', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Customer, Customer, QAfterSortBy> thenByAdvanceBalanceDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'advanceBalance', Sort.desc);
+    });
+  }
+
   QueryBuilder<Customer, Customer, QAfterSortBy> thenByCreatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'createdAt', Sort.asc);
@@ -1359,6 +1456,12 @@ extension CustomerQuerySortThenBy
 
 extension CustomerQueryWhereDistinct
     on QueryBuilder<Customer, Customer, QDistinct> {
+  QueryBuilder<Customer, Customer, QDistinct> distinctByAdvanceBalance() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'advanceBalance');
+    });
+  }
+
   QueryBuilder<Customer, Customer, QDistinct> distinctByCreatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'createdAt');
@@ -1429,6 +1532,12 @@ extension CustomerQueryProperty
   QueryBuilder<Customer, int, QQueryOperations> isarIdProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'isarId');
+    });
+  }
+
+  QueryBuilder<Customer, double, QQueryOperations> advanceBalanceProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'advanceBalance');
     });
   }
 

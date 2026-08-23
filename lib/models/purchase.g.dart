@@ -95,7 +95,7 @@ const PurchaseSchema = CollectionSchema(
   getId: _purchaseGetId,
   getLinks: _purchaseGetLinks,
   attach: _purchaseAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _purchaseEstimateSize(

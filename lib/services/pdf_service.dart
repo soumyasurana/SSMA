@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:isar_community/isar.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
@@ -31,21 +32,69 @@ class PDFService {
         pw.Font.ttf(await rootBundle.load("assets/fonts/Roboto-Bold.ttf"));
     final formatter = DateFormat('dd MMM yyyy, hh:mm a');
 
-    double previousBalance = 0;
+    double previousDue = 0.0;
+    double priorAdvance = 0.0;
+    double advanceAdjusted = 0.0;
+    double remainingAdvanceAfterSale = 0.0;
+    double amountPayable = sale.totalAmount;
+    double remainingDueAfterSale = 0.0;
 
-    if (sale.saleType == SaleType.credit) {
-      final allSales = await DBService.getAllSales();
-      final customerSales = allSales.where((s) =>
-          s.buyerName == sale.buyerName &&
-          s.buyerContact == sale.buyerContact &&
-          s.saleType == SaleType.credit &&
-          s.date.isBefore(sale.date) &&
-          s.uuid != sale.uuid);
-      for (final s in customerSales) {
-        previousBalance += (s.totalAmount - s.amountReceived);
+        if (sale.saleType == SaleType.credit) {
+      Customer? customer;
+      if (sale.customerUuid != null && sale.customerUuid!.isNotEmpty) {
+        customer = await DBService.isar.customers
+            .filter()
+            .uuidEqualTo(sale.customerUuid!)
+            .findFirst();
       }
-    }
+      if (customer == null && sale.buyerName != null && sale.buyerName!.isNotEmpty) {
+        customer = await DBService.isar.customers
+            .filter()
+            .nameEqualTo(sale.buyerName!)
+            .and()
+            .deletedEqualTo(false)
+            .findFirst();
+      }
 
+      if (customer != null) {
+        // customer.pendingDues / advanceBalance are the AUTHORITATIVE,
+        // already-reconciled account position — computed by
+        // DBService._computeCustomerAccountState(), which includes repair
+        // logic for legacy duplicate-payment records. Do NOT re-derive this
+        // independently from raw Sale/CustomerPayment rows here; a second,
+        // simpler implementation will drift from the authoritative one
+        // (e.g. double-subtracting a payment that was recorded both as a
+        // Sale.amountReceived and a separate CustomerPayment — producing a
+        // large phantom "advance" instead of the real, smaller due).
+        //
+        // By the time generateInvoice() runs, recordSale() has already
+        // persisted `sale` and recalculated the customer's balances to
+        // INCLUDE this very bill. So: take the current (post-sale) net
+        // position and back out only this sale's own contribution to get
+        // the position as it stood BEFORE this sale.
+        final netPositionAfter = customer.pendingDues - customer.advanceBalance;
+        final currentContribution = sale.totalAmount - sale.amountReceived;
+        final netPositionBefore = netPositionAfter - currentContribution;
+
+        if (netPositionBefore > 0.01) {
+          previousDue = (netPositionBefore * 100).roundToDouble() / 100;
+        } else if (netPositionBefore < -0.01) {
+          priorAdvance = (netPositionBefore.abs() * 100).roundToDouble() / 100;
+        }
+      }
+
+      if (priorAdvance > 0) {
+        advanceAdjusted =
+            (sale.totalAmount < priorAdvance) ? sale.totalAmount : priorAdvance;
+        remainingAdvanceAfterSale = priorAdvance - advanceAdjusted;
+        amountPayable = sale.totalAmount - advanceAdjusted;
+      }
+
+      remainingDueAfterSale =
+          previousDue + (amountPayable - sale.amountReceived);
+      if (remainingDueAfterSale < 0) remainingDueAfterSale = 0.0;
+    }
+    
     pw.ImageProvider? logo;
     try {
       final imageBytes = await rootBundle.load('assets/logo_app.png');
@@ -59,8 +108,8 @@ class PDFService {
         pw.TextStyle(font: boldFont, fontSize: 12, color: PdfColors.white);
     final cellStyle = pw.TextStyle(font: font, fontSize: 11);
     final labelStyle =
-        pw.TextStyle(font: font, fontSize: 12, color: PdfColors.grey700);
-    final valueStyle = pw.TextStyle(font: boldFont, fontSize: 12);
+        pw.TextStyle(font: font, fontSize: 11, color: PdfColors.grey800);
+    final valueStyle = pw.TextStyle(font: boldFont, fontSize: 11);
 
     const primaryColor = PdfColor.fromInt(0xFF1565C0);
     const accentColor = PdfColor.fromInt(0xFFE3F2FD);
@@ -277,7 +326,7 @@ class PDFService {
           pw.Align(
             alignment: pw.Alignment.centerRight,
             child: pw.Container(
-              width: 240,
+              width: 260,
               decoration: pw.BoxDecoration(
                 border: pw.TableBorder.all(color: dividerColor, width: 0.5),
                 borderRadius:
@@ -291,7 +340,7 @@ class PDFService {
                     child: pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
-                        pw.Text('Items Subtotal:', style: labelStyle),
+                        pw.Text('Sale Total:', style: labelStyle),
                         pw.Text('Rs. ${sale.totalAmount.toStringAsFixed(2)}',
                             style: valueStyle),
                       ],
@@ -317,7 +366,43 @@ class PDFService {
                     ),
                   ],
 
-                  if (previousBalance > 0) ...[
+                  // Advance Adjustment breakdown (if customer has advance)
+                  if (priorAdvance > 0) ...[
+                    pw.Container(height: 0.5, color: dividerColor),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 5),
+                      child: pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Adjusted from Customer Advance:',
+                              style: labelStyle),
+                          pw.Text(
+                              'Rs. ${advanceAdjusted.toStringAsFixed(2)}',
+                              style: pw.TextStyle(
+                                  font: boldFont,
+                                  fontSize: 11,
+                                  color: PdfColors.blue800)),
+                        ],
+                      ),
+                    ),
+                    pw.Container(height: 0.5, color: dividerColor),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 5),
+                      child: pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Amount Payable:', style: labelStyle),
+                          pw.Text('Rs. ${amountPayable.toStringAsFixed(2)}',
+                              style: valueStyle),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  // Previous Due (if customer had prior dues)
+                  if (previousDue > 0) ...[
                     pw.Container(height: 0.5, color: dividerColor),
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
@@ -326,7 +411,7 @@ class PDFService {
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
                           pw.Text('Previous Due:', style: labelStyle),
-                          pw.Text('Rs. ${previousBalance.toStringAsFixed(2)}',
+                          pw.Text('Rs. ${previousDue.toStringAsFixed(2)}',
                               style: pw.TextStyle(
                                   font: boldFont,
                                   fontSize: 11,
@@ -336,6 +421,7 @@ class PDFService {
                     ),
                   ],
 
+                  // Payment method breakdown / Billing-time new payment
                   if (metadata.payments.isNotEmpty) ...[
                     pw.Container(height: 0.5, color: dividerColor),
                     ...metadata.payments.map(
@@ -355,9 +441,7 @@ class PDFService {
                         ),
                       ),
                     ),
-                  ],
-
-                  if (sale.amountReceived > 0) ...[
+                  ] else if (sale.amountReceived > 0) ...[
                     pw.Container(height: 0.5, color: dividerColor),
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
@@ -365,7 +449,11 @@ class PDFService {
                       child: pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
-                          pw.Text('Total Paid:', style: labelStyle),
+                          pw.Text(
+                              priorAdvance > 0
+                                  ? 'New Payment Received:'
+                                  : 'Total Paid:',
+                              style: labelStyle),
                           pw.Text(
                               'Rs. ${sale.amountReceived.toStringAsFixed(2)}',
                               style: pw.TextStyle(
@@ -377,7 +465,29 @@ class PDFService {
                     ),
                   ],
 
-                  // Net Due / Grand Total
+                  // Remaining Advance (if customer had advance)
+                  if (priorAdvance > 0) ...[
+                    pw.Container(height: 0.5, color: dividerColor),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      child: pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Remaining Customer Advance:',
+                              style: labelStyle),
+                          pw.Text(
+                              'Rs. ${remainingAdvanceAfterSale.toStringAsFixed(2)}',
+                              style: pw.TextStyle(
+                                  font: boldFont,
+                                  fontSize: 11,
+                                  color: PdfColors.green800)),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  // Net Due / Grand Total Bottom Banner
                   pw.Container(height: 0.5, color: dividerColor),
                   pw.Container(
                     padding: const pw.EdgeInsets.symmetric(
@@ -394,7 +504,7 @@ class PDFService {
                       children: [
                         pw.Text(
                           sale.saleType == SaleType.credit
-                              ? 'Net Due:'
+                              ? 'Remaining Amount Due:'
                               : 'Grand Total:',
                           style: pw.TextStyle(
                               font: boldFont,
@@ -402,7 +512,9 @@ class PDFService {
                               color: PdfColors.white),
                         ),
                         pw.Text(
-                          'Rs. ${(sale.totalAmount + previousBalance - sale.amountReceived).toStringAsFixed(2)}',
+                          sale.saleType == SaleType.credit
+                              ? 'Rs. ${remainingDueAfterSale.toStringAsFixed(2)}'
+                              : 'Rs. ${sale.totalAmount.toStringAsFixed(2)}',
                           style: pw.TextStyle(
                               font: boldFont,
                               fontSize: 13,
@@ -482,16 +594,26 @@ class PDFService {
           (customer.phone != null && customer.phone!.isNotEmpty && s.buyerContact == customer.phone);
     }).toList();
 
-    // Sort chronologically
-    partySales.sort((a, b) => a.date.compareTo(b.date));
-    allPayments.sort((a, b) => a.date.compareTo(b.date));
+    // Sort chronologically and deterministically
+    partySales.sort((a, b) {
+      final cmp = a.date.compareTo(b.date);
+      return cmp != 0 ? cmp : a.isarId.compareTo(b.isarId);
+    });
+    allPayments.sort((a, b) {
+      final cmp = a.date.compareTo(b.date);
+      return cmp != 0 ? cmp : a.isarId.compareTo(b.isarId);
+    });
 
-    // Combine into timeline
+    // Combine into timeline with deterministic tie-breaking
     final events = <dynamic>[...partySales, ...allPayments];
     events.sort((a, b) {
       final dateA = (a is Sale) ? a.date : (a as CustomerPayment).date;
       final dateB = (b is Sale) ? b.date : (b as CustomerPayment).date;
-      return dateA.compareTo(dateB);
+      final cmp = dateA.compareTo(dateB);
+      if (cmp != 0) return cmp;
+      final idA = (a is Sale) ? a.isarId : (a as CustomerPayment).isarId;
+      final idB = (b is Sale) ? b.isarId : (b as CustomerPayment).isarId;
+      return idA.compareTo(idB);
     });
 
     final DateTime startDate = events.isNotEmpty
@@ -506,6 +628,17 @@ class PDFService {
 
     final indianFmt = NumberFormat('#,##,##0.00', 'en_IN');
     String fmt(double val) => indianFmt.format(val);
+
+    String fmtBalance(double bal) {
+      final rounded = (bal * 100).roundToDouble() / 100;
+      if (rounded > 0) {
+        return 'Rs. ${fmt(rounded)} Dr';
+      } else if (rounded < 0) {
+        return 'Rs. ${fmt(rounded.abs())} Cr';
+      } else {
+        return 'Rs. 0.00';
+      }
+    }
 
     // Calculate opening balance prior to startDate
     double openingBalance = 0.0;
@@ -522,6 +655,7 @@ class PDFService {
       openingBalance -= p.amountReceived;
     }
 
+    double runningBalance = openingBalance;
     final List<_TallyLedgerRow> rows = [];
 
     // 1. Opening Balance Row
@@ -534,6 +668,7 @@ class PDFService {
         vchNo: '',
         debit: openingBalance >= 0 ? openingBalance : null,
         credit: openingBalance < 0 ? -openingBalance : null,
+        runningBalance: runningBalance,
         isOpening: true,
       ));
     }
@@ -546,20 +681,39 @@ class PDFService {
         final vchNoStr = event.isarId.toString().padLeft(3, '0');
 
         // Sales Debit Entry
+        final double balanceBeforeSale = runningBalance;
+        runningBalance += event.totalAmount;
+
+        String saleParticulars = 'Sales';
+        if (balanceBeforeSale < 0) {
+          final double priorAdvance = balanceBeforeSale.abs();
+          if (event.totalAmount <= priorAdvance) {
+            final double remainingAdvance = priorAdvance - event.totalAmount;
+            saleParticulars =
+                'Sales (Offset from Advance - Advance now: Rs. ${fmt(remainingAdvance)})';
+          } else {
+            final double excessDue = event.totalAmount - priorAdvance;
+            saleParticulars =
+                'Sales (Advance Exhausted - Net Due: Rs. ${fmt(excessDue)})';
+          }
+        }
+
         rows.add(_TallyLedgerRow(
           date: dateStr,
           prefix: 'To',
-          particulars: 'Sales',
+          particulars: saleParticulars,
           vchType: 'Sales',
           vchNo: vchNoStr,
           debit: event.totalAmount,
           credit: null,
+          runningBalance: runningBalance,
         ));
 
         // Payment / Receipt Entries (Cash, UPI, etc. breakdown)
         final metadata = SaleMetadata.parse(event.comment);
         if (metadata.payments.isNotEmpty) {
           for (final p in metadata.payments) {
+            runningBalance -= p.amount;
             rows.add(_TallyLedgerRow(
               date: dateStr,
               prefix: 'By',
@@ -568,9 +722,11 @@ class PDFService {
               vchNo: vchNoStr,
               debit: null,
               credit: p.amount,
+              runningBalance: runningBalance,
             ));
           }
         } else if (event.amountReceived > 0) {
+          runningBalance -= event.amountReceived;
           rows.add(_TallyLedgerRow(
             date: dateStr,
             prefix: 'By',
@@ -579,10 +735,12 @@ class PDFService {
             vchNo: vchNoStr,
             debit: null,
             credit: event.amountReceived,
+            runningBalance: runningBalance,
           ));
         }
       } else if (event is CustomerPayment) {
         final vchNoStr = event.isarId.toString().padLeft(3, '0');
+        runningBalance -= event.amountReceived;
 
         rows.add(_TallyLedgerRow(
           date: dateStr,
@@ -592,6 +750,7 @@ class PDFService {
           vchNo: vchNoStr,
           debit: null,
           credit: event.amountReceived,
+          runningBalance: runningBalance,
         ));
       }
     }
@@ -622,12 +781,8 @@ class PDFService {
                   pw.SizedBox(height: 2),
                   pw.Text(storeName,
                       style: pw.TextStyle(font: boldFont, fontSize: 12)),
-                  pw.Text('Ledger Account',
+                  pw.Text('Ledger Account Statement',
                       style: pw.TextStyle(font: font, fontSize: 10)),
-                  pw.Text('Shop No:250, Old L.R Market,',
-                      style: pw.TextStyle(font: font, fontSize: 9)),
-                  pw.Text('Delhi',
-                      style: pw.TextStyle(font: font, fontSize: 9)),
                   pw.SizedBox(height: 4),
                   pw.Text(periodStr,
                       style: pw.TextStyle(font: font, fontSize: 9)),
@@ -645,7 +800,7 @@ class PDFService {
         build: (context) {
           final tableRows = <pw.TableRow>[];
 
-          // 1. Table Header Row
+          // 1. Table Header Row (7 Columns: Date | Particulars | Vch Type | Vch No | Debit | Credit | Balance)
           tableRows.add(
             pw.TableRow(
               decoration: const pw.BoxDecoration(
@@ -658,37 +813,45 @@ class PDFService {
                 pw.Padding(
                   padding: const pw.EdgeInsets.symmetric(vertical: 4),
                   child: pw.Text('Date',
-                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                      style: pw.TextStyle(font: boldFont, fontSize: 9)),
                 ),
                 pw.Padding(
                   padding: const pw.EdgeInsets.symmetric(vertical: 4),
                   child: pw.Text('Particulars',
-                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                      style: pw.TextStyle(font: boldFont, fontSize: 9)),
                 ),
                 pw.Padding(
                   padding: const pw.EdgeInsets.symmetric(vertical: 4),
                   child: pw.Text('Vch Type',
-                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                      style: pw.TextStyle(font: boldFont, fontSize: 9)),
                 ),
                 pw.Padding(
                   padding: const pw.EdgeInsets.symmetric(vertical: 4),
                   child: pw.Text('Vch No.',
-                      style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                      style: pw.TextStyle(font: boldFont, fontSize: 9)),
                 ),
                 pw.Padding(
                   padding: const pw.EdgeInsets.symmetric(vertical: 4),
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
-                    child: pw.Text('Debit',
-                        style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                    child: pw.Text('Debit (Rs.)',
+                        style: pw.TextStyle(font: boldFont, fontSize: 9)),
                   ),
                 ),
                 pw.Padding(
                   padding: const pw.EdgeInsets.symmetric(vertical: 4),
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
-                    child: pw.Text('Credit',
-                        style: pw.TextStyle(font: boldFont, fontSize: 10)),
+                    child: pw.Text('Credit (Rs.)',
+                        style: pw.TextStyle(font: boldFont, fontSize: 9)),
+                  ),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text('Balance',
+                        style: pw.TextStyle(font: boldFont, fontSize: 9)),
                   ),
                 ),
               ],
@@ -703,34 +866,38 @@ class PDFService {
                   pw.Padding(
                     padding: const pw.EdgeInsets.symmetric(vertical: 2),
                     child: pw.Text(r.date,
-                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                        style: pw.TextStyle(font: font, fontSize: 8.5)),
                   ),
                   pw.Padding(
                     padding: const pw.EdgeInsets.symmetric(vertical: 2),
                     child: pw.Row(
                       children: [
                         pw.SizedBox(
-                          width: 20,
+                          width: 16,
                           child: pw.Text(r.prefix,
-                              style: pw.TextStyle(font: font, fontSize: 9.5)),
+                              style: pw.TextStyle(font: font, fontSize: 8.5)),
                         ),
-                        pw.SizedBox(width: 8),
-                        pw.Text(r.particulars,
+                        pw.SizedBox(width: 4),
+                        pw.Expanded(
+                          child: pw.Text(
+                            r.particulars,
                             style: pw.TextStyle(
                                 font: r.isOpening ? boldFont : font,
-                                fontSize: 9.5)),
+                                fontSize: 8.5),
+                          ),
+                        ),
                       ],
                     ),
                   ),
                   pw.Padding(
                     padding: const pw.EdgeInsets.symmetric(vertical: 2),
                     child: pw.Text(r.vchType,
-                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                        style: pw.TextStyle(font: font, fontSize: 8.5)),
                   ),
                   pw.Padding(
                     padding: const pw.EdgeInsets.symmetric(vertical: 2),
                     child: pw.Text(r.vchNo,
-                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                        style: pw.TextStyle(font: font, fontSize: 8.5)),
                   ),
                   pw.Padding(
                     padding: const pw.EdgeInsets.symmetric(vertical: 2),
@@ -739,7 +906,7 @@ class PDFService {
                       child: pw.Text(
                         r.debit != null ? fmt(r.debit!) : '',
                         style: pw.TextStyle(
-                            font: r.isOpening ? boldFont : font, fontSize: 9.5),
+                            font: r.isOpening ? boldFont : font, fontSize: 8.5),
                       ),
                     ),
                   ),
@@ -750,7 +917,18 @@ class PDFService {
                       child: pw.Text(
                         r.credit != null ? fmt(r.credit!) : '',
                         style: pw.TextStyle(
-                            font: r.isOpening ? boldFont : font, fontSize: 9.5),
+                            font: r.isOpening ? boldFont : font, fontSize: 8.5),
+                      ),
+                    ),
+                  ),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Align(
+                      alignment: pw.Alignment.centerRight,
+                      child: pw.Text(
+                        fmtBalance(r.runningBalance),
+                        style: pw.TextStyle(
+                            font: boldFont, fontSize: 8.5),
                       ),
                     ),
                   ),
@@ -777,7 +955,7 @@ class PDFService {
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
                     child: pw.Text(fmt(totalDebit),
-                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                        style: pw.TextStyle(font: boldFont, fontSize: 9)),
                   ),
                 ),
                 pw.Padding(
@@ -785,9 +963,10 @@ class PDFService {
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
                     child: pw.Text(fmt(totalCredit),
-                        style: pw.TextStyle(font: font, fontSize: 9.5)),
+                        style: pw.TextStyle(font: boldFont, fontSize: 9)),
                   ),
                 ),
+                pw.SizedBox(),
               ],
             ),
           );
@@ -802,17 +981,19 @@ class PDFService {
                   child: pw.Row(
                     children: [
                       pw.SizedBox(
-                        width: 20,
-                        child: pw.Text('By',
-                            style: pw.TextStyle(font: font, fontSize: 9.5)),
+                        width: 16,
+                        child: pw.Text(closingBalance >= 0 ? 'By' : 'To',
+                            style: pw.TextStyle(font: font, fontSize: 8.5)),
                       ),
-                      pw.SizedBox(width: 8),
-                      pw.Text('Closing Balance',
-                          style: pw.TextStyle(font: boldFont, fontSize: 9.5)),
+                      pw.SizedBox(width: 4),
+                      pw.Text(
+                          closingBalance < 0
+                              ? 'Closing Balance (Advance)'
+                              : 'Closing Balance',
+                          style: pw.TextStyle(font: boldFont, fontSize: 8.5)),
                     ],
                   ),
                 ),
-                pw.SizedBox(),
                 pw.SizedBox(),
                 pw.SizedBox(),
                 pw.Padding(
@@ -820,8 +1001,28 @@ class PDFService {
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
                     child: pw.Text(
+                      closingBalance < 0 ? fmt(closingBalance.abs()) : '',
+                      style: pw.TextStyle(font: boldFont, fontSize: 8.5),
+                    ),
+                  ),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text(
                       closingBalance >= 0 ? fmt(closingBalance) : '',
-                      style: pw.TextStyle(font: boldFont, fontSize: 9.5),
+                      style: pw.TextStyle(font: boldFont, fontSize: 8.5),
+                    ),
+                  ),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.Text(
+                      fmtBalance(closingBalance),
+                      style: pw.TextStyle(font: boldFont, fontSize: 8.5),
                     ),
                   ),
                 ),
@@ -829,7 +1030,7 @@ class PDFService {
             ),
           );
 
-          // 5. Grand Balanced Total Row (with double bottom line!)
+          // 5. Grand Balanced Total Row
           tableRows.add(
             pw.TableRow(
               decoration: const pw.BoxDecoration(
@@ -851,7 +1052,7 @@ class PDFService {
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
                     child: pw.Text(fmt(grandTotal),
-                        style: pw.TextStyle(font: boldFont, fontSize: 9.5)),
+                        style: pw.TextStyle(font: boldFont, fontSize: 9)),
                   ),
                 ),
                 pw.Padding(
@@ -859,9 +1060,10 @@ class PDFService {
                   child: pw.Align(
                     alignment: pw.Alignment.centerRight,
                     child: pw.Text(fmt(grandTotal),
-                        style: pw.TextStyle(font: boldFont, fontSize: 9.5)),
+                        style: pw.TextStyle(font: boldFont, fontSize: 9)),
                   ),
                 ),
+                pw.SizedBox(),
               ],
             ),
           );
@@ -869,14 +1071,36 @@ class PDFService {
           return [
             pw.Table(
               columnWidths: const {
-                0: pw.FixedColumnWidth(65),
-                1: pw.FlexColumnWidth(3),
-                2: pw.FixedColumnWidth(65),
-                3: pw.FixedColumnWidth(50),
-                4: pw.FixedColumnWidth(90),
-                5: pw.FixedColumnWidth(90),
+                0: pw.FlexColumnWidth(1.2),
+                1: pw.FlexColumnWidth(2.5),
+                2: pw.FlexColumnWidth(1.1),
+                3: pw.FlexColumnWidth(1.0),
+                4: pw.FlexColumnWidth(1.4),
+                5: pw.FlexColumnWidth(1.4),
+                6: pw.FlexColumnWidth(1.6),
               },
               children: tableRows,
+            ),
+            pw.SizedBox(height: 16),
+            pw.Container(
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey400, width: 0.5),
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    'Authoritative Closing Position:',
+                    style: pw.TextStyle(font: boldFont, fontSize: 9),
+                  ),
+                  pw.Text(
+                    fmtBalance(customer.pendingDues - customer.advanceBalance),
+                    style: pw.TextStyle(font: boldFont, fontSize: 10),
+                  ),
+                ],
+              ),
             ),
           ];
         },
@@ -1058,7 +1282,7 @@ class PDFService {
 
     final dateFormatter = DateFormat('dd-MMM-yyyy');
     final currencyFmt = NumberFormat('#,##,##0.00', 'en_IN');
-    String fmt(double val) => '₹${currencyFmt.format(val)}';
+    String fmt(double val) => 'Rs. ${currencyFmt.format(val)}';
 
     pdf.addPage(
       pw.MultiPage(
@@ -1377,6 +1601,7 @@ class _TallyLedgerRow {
   final String vchNo;
   final double? debit;
   final double? credit;
+  final double runningBalance;
   final bool isOpening;
 
   const _TallyLedgerRow({
@@ -1387,6 +1612,7 @@ class _TallyLedgerRow {
     required this.vchNo,
     this.debit,
     this.credit,
+    required this.runningBalance,
     this.isOpening = false,
   });
 }

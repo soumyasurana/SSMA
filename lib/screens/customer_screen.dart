@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:ssma/models/customer.dart';
-import 'package:ssma/models/sale.dart';
 import 'package:ssma/screens/customer_detail_screen.dart';
 import 'package:ssma/services/db_service.dart';
 import 'package:ssma/services/device_service.dart';
@@ -48,22 +47,6 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
   Future<void> _loadCustomers() async {
     final customers = await DBService.getCustomers();
-    final allSales = await DBService.getAllSales();
-
-    for (final customer in customers) {
-      final customerSales = allSales.where(
-        (sale) =>
-            sale.customerUuid == customer.uuid &&
-            sale.saleType == SaleType.credit,
-      );
-
-      final dues = customerSales.fold(
-        0.0,
-        (sum, sale) => sum + (sale.totalAmount - sale.amountReceived),
-      );
-
-      customer.pendingDues = dues.clamp(0.0, double.infinity);
-    }
 
     customers.sort(
       (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
@@ -208,7 +191,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
 
     if (confirm == true) {
       try {
-        await DBService.deleteCustomer(customer.uuid);
+        await DBService.deleteCustomer(customer.uuid, isarId: customer.isarId);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Customer deleted')),
@@ -268,12 +251,27 @@ class _CustomerScreenState extends State<CustomerScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(customer.phone ?? 'No phone'),
-                              Text(
-                                'Pending Dues: ₹${customer.pendingDues.toStringAsFixed(2)}',
-                                style: const TextStyle(
-                                    color: Colors.redAccent,
-                                    fontWeight: FontWeight.w500),
-                              ),
+                              if (customer.pendingDues > 0)
+                                Text(
+                                  'Pending Dues: ₹${customer.pendingDues.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                      color: Colors.redAccent,
+                                      fontWeight: FontWeight.w500),
+                                )
+                              else if (customer.advanceBalance > 0)
+                                Text(
+                                  'Advance: ₹${customer.advanceBalance.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                      color: Colors.green,
+                                      fontWeight: FontWeight.w500),
+                                )
+                              else
+                                const Text(
+                                  'Account Settled (₹0.00)',
+                                  style: TextStyle(
+                                      color: Colors.grey,
+                                      fontWeight: FontWeight.w500),
+                                ),
                             ],
                           ),
                           trailing: IconButton(

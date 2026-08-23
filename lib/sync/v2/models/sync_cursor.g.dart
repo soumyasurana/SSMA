@@ -93,7 +93,7 @@ const SyncCursorSchema = CollectionSchema(
   getId: _syncCursorGetId,
   getLinks: _syncCursorGetLinks,
   attach: _syncCursorAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _syncCursorEstimateSize(

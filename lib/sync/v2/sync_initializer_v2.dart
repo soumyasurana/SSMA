@@ -178,7 +178,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _initialized) {
       debugPrint('[SyncInitializerV2]: app resumed — triggering sync');
-      syncManager.syncWithAllPeers();
+      unawaited(_syncAndReconcile());
     }
   }
 
@@ -281,7 +281,20 @@ class SyncInitializerV2 with WidgetsBindingObserver {
           Timer(const Duration(seconds: 1), _runDebouncedSync);
       return;
     }
-    unawaited(syncManager.syncWithAllPeers());
+    unawaited(_syncAndReconcile());
+  }
+
+  /// Runs a full sync cycle with all peers, then reconciles all customer
+  /// account balances. Synced [Sale] and [CustomerPayment] records change the
+  /// transaction ledger but their handlers do not update the cached
+  /// [Customer.pendingDues] / [Customer.advanceBalance] fields (they run
+  /// inside a writeTxn that forbids nested reads). Reconciliation corrects the
+  /// cached totals from the actual transaction records, ensuring accounting is
+  /// always consistent regardless of which device records a payment or sale.
+  Future<void> _syncAndReconcile({bool respectAutoSyncFlag = true}) async {
+    await syncManager.syncWithAllPeers(
+        respectAutoSyncFlag: respectAutoSyncFlag);
+    await DBService.reconcileAllCustomerAccounts();
   }
 
   /// Forces a full re-sync with all paired peers by resetting all cursors.
@@ -290,7 +303,7 @@ class SyncInitializerV2 with WidgetsBindingObserver {
     for (final c in cursors) {
       await cursorManager.resetCursor(c.remoteDeviceId);
     }
-    await syncManager.syncWithAllPeers(respectAutoSyncFlag: false);
+    await _syncAndReconcile(respectAutoSyncFlag: false);
   }
 
   /// Returns the current maximum local change sequence.

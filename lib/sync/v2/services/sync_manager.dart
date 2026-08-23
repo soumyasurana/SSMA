@@ -4,7 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 
 import '../models/peer_device.dart';
 import '../models/sync_change_log.dart';

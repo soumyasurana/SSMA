@@ -10,7 +10,7 @@ import 'package:ssma/models/supplier_payment.dart';
 import 'package:ssma/screens/new_sale_screen.dart';
 import 'package:ssma/screens/customer_detail_screen.dart';
 import 'package:ssma/screens/supplier_detail_screen.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:intl/intl.dart';
 
 class RecentTransactionsSection extends StatelessWidget {

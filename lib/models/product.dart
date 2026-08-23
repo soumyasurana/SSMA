@@ -1,4 +1,4 @@
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 
 part 'product.g.dart';
@@ -65,15 +65,43 @@ class Product {
     isSynced = false;
   }
 
+  static double _sanitizeMonetary(dynamic val) {
+    if (val == null) return 0.0;
+    if (val is num) {
+      final d = val.toDouble();
+      if (!d.isFinite || d.isNaN) return 0.0;
+      return d < 0 ? 0.0 : d;
+    }
+    if (val is String) {
+      final parsed = double.tryParse(val);
+      if (parsed == null || !parsed.isFinite || parsed.isNaN) return 0.0;
+      return parsed < 0 ? 0.0 : parsed;
+    }
+    return 0.0;
+  }
+
+  static int _sanitizeQuantity(dynamic val) {
+    if (val == null) return 0;
+    if (val is num) {
+      if (!val.toDouble().isFinite || val.toDouble().isNaN) return 0;
+      return val.toInt();
+    }
+    if (val is String) {
+      final parsed = int.tryParse(val);
+      return parsed ?? 0;
+    }
+    return 0;
+  }
+
   // ---------------------------
   // JSON → BACKEND
   // ---------------------------
   Map<String, dynamic> toJson() => {
         "id": uuid,
         "name": name,
-        "sale_price": salePrice,
-        "purchase_price": purchasePrice,
-        "quantity": quantity,
+        "sale_price": _sanitizeMonetary(salePrice),
+        "purchase_price": _sanitizeMonetary(purchasePrice),
+        "quantity": _sanitizeQuantity(quantity),
         "image_path": imagePath,
         "version": version,
         "device_id": deviceId,
@@ -91,9 +119,9 @@ class Product {
     p.uuid = json["id"];
     p.name = json["name"];
 
-    p.salePrice = (json["sale_price"] ?? 0).toDouble();
-    p.purchasePrice = (json["purchase_price"] ?? 0).toDouble();
-    p.quantity = json["quantity"] ?? 0;
+    p.salePrice = _sanitizeMonetary(json["sale_price"]);
+    p.purchasePrice = _sanitizeMonetary(json["purchase_price"]);
+    p.quantity = _sanitizeQuantity(json["quantity"]);
 
     p.imagePath = json["image_path"];
 

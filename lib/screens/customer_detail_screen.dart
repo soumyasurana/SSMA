@@ -18,6 +18,7 @@ class CustomerDetailScreen extends StatefulWidget {
 class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   List<Sale> _customerSales = [];
   double _pendingDues = 0;
+  double _advanceBalance = 0;
   List<CustomerPayment> _customerPayments = [];
   bool _isGeneratingLedger = false;
 
@@ -51,6 +52,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   }
 
   Future<void> _loadCustomerData() async {
+    final updatedCustomer =
+        await DBService.recalculateCustomerAccount(widget.customer.uuid);
+
     final sales = await DBService.getAllSales();
 
     final relevantSales = sales
@@ -59,47 +63,26 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             sale.saleType == SaleType.credit)
         .toList();
 
-    double dues = relevantSales.fold(
-        0.0, (sum, sale) => sum + (sale.totalAmount - sale.amountReceived));
-    dues = dues.clamp(0.0, double.infinity);
-
     final payments = await DBService.getCustomerPaymentsByCustomerUuid(
       widget.customer.uuid,
     );
 
     setState(() {
       _customerSales = relevantSales;
-      _pendingDues = dues;
+      _pendingDues = updatedCustomer?.pendingDues ?? widget.customer.pendingDues;
+      _advanceBalance =
+          updatedCustomer?.advanceBalance ?? widget.customer.advanceBalance;
       _customerPayments = payments;
     });
   }
 
   Future<void> _handlePayment(double amount) async {
-    double remaining = amount;
-    final sortedSales = [..._customerSales]
-      ..sort((a, b) => a.date.compareTo(b.date));
-
-    for (final sale in sortedSales) {
-      final due = sale.totalAmount - sale.amountReceived;
-      if (due <= 0) continue;
-
-      final payment = remaining >= due ? due : remaining;
-      sale.amountReceived += payment;
-
-      await DBService.updateSale(sale);
-
-      remaining -= payment;
-      if (remaining <= 0) break;
-    }
-
-    final newDue = (_pendingDues - amount).clamp(0, double.infinity);
-
     final payment = CustomerPayment.create(
       customerUuid: widget.customer.uuid,
       customerName: widget.customer.name,
       amountReceived: amount,
       previousDue: _pendingDues,
-      newDue: newDue.toDouble(),
+      newDue: (_pendingDues - amount).clamp(0, double.infinity),
       date: DateTime.now(),
       deviceId: await DeviceService.getDeviceId(),
     );
@@ -111,7 +94,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       const SnackBar(content: Text("Payment recorded successfully.")),
     );
 
-    _loadCustomerData();
+    await _loadCustomerData();
   }
 
   void _showPaymentDialog() {
@@ -133,19 +116,10 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               child: const Text("Cancel")),
           ElevatedButton(
             onPressed: () {
-              final amount = double.tryParse(controller.text);
+              final amount = double.tryParse(controller.text.trim());
               if (amount == null || amount <= 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Please enter a valid amount.")),
-                );
-                return;
-              }
-              if (amount > _pendingDues) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                        "Amount cannot exceed pending dues (₹${_pendingDues.toStringAsFixed(2)})."),
-                  ),
+                  const SnackBar(content: Text("Please enter a valid positive amount.")),
                 );
                 return;
               }
@@ -157,6 +131,43 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _confirmDeleteCustomer() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Customer'),
+        content: Text('Are you sure you want to delete ${widget.customer.name}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await DBService.deleteCustomer(widget.customer.uuid, isarId: widget.customer.isarId);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Customer deleted')),
+        );
+        Navigator.pop(context, true);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete customer: $e')),
+        );
+      }
+    }
   }
 
   @override
@@ -181,6 +192,11 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 : const Icon(Icons.picture_as_pdf),
             onPressed: _isGeneratingLedger ? null : _generateLedger,
           ),
+          IconButton(
+            tooltip: "Delete Customer",
+            icon: const Icon(Icons.delete, color: Colors.white),
+            onPressed: _confirmDeleteCustomer,
+          ),
         ],
       ),
       body: Padding(
@@ -200,14 +216,33 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   subtitle: Text(customer.phone ?? 'No contact'),
                   trailing: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      const Text('Pending Dues',
-                          style: TextStyle(fontSize: 12)),
-                      Text('₹${_pendingDues.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                              fontSize: 16,
-                              color: Colors.red,
-                              fontWeight: FontWeight.bold)),
+                      if (_pendingDues > 0) ...[
+                        const Text('Pending Dues',
+                            style: TextStyle(fontSize: 12)),
+                        Text('₹${_pendingDues.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                                fontSize: 16,
+                                color: Colors.red,
+                                fontWeight: FontWeight.bold)),
+                      ] else if (_advanceBalance > 0) ...[
+                        const Text('Advance Balance',
+                            style: TextStyle(fontSize: 12)),
+                        Text('₹${_advanceBalance.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                                fontSize: 16,
+                                color: Colors.green,
+                                fontWeight: FontWeight.bold)),
+                      ] else ...[
+                        const Text('Account Settled',
+                            style: TextStyle(fontSize: 12)),
+                        const Text('₹0.00',
+                            style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.grey,
+                                fontWeight: FontWeight.bold)),
+                      ],
                     ],
                   ),
                 ),
@@ -230,16 +265,14 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.deepOrange),
                   ),
-                  if (_pendingDues > 0) ...[
-                    const SizedBox(width: 12),
-                    ElevatedButton.icon(
-                      onPressed: _showPaymentDialog,
-                      icon: const Icon(Icons.currency_rupee),
-                      label: const Text("Update Payment"),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green),
-                    ),
-                  ],
+                  const SizedBox(width: 12),
+                  ElevatedButton.icon(
+                    onPressed: _showPaymentDialog,
+                    icon: const Icon(Icons.currency_rupee),
+                    label: const Text("Receive Payment"),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green),
+                  ),
                 ],
               ),
               const SizedBox(height: 24),

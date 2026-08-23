@@ -79,7 +79,7 @@ const SupplierSchema = CollectionSchema(
   getId: _supplierGetId,
   getLinks: _supplierGetLinks,
   attach: _supplierAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _supplierEstimateSize(

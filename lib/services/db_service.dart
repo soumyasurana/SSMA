@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
@@ -237,6 +237,9 @@ class DBService {
 
     // Run duplicate/stale peer cleanup migration
     await cleanupDuplicateAndStalePeers();
+
+    // Reconcile customer credit/advance balances
+    await reconcileAllCustomerAccounts();
   }
 
   /// Backfills the v2 journal with CREATE entries for any legacy entity rows
@@ -442,11 +445,37 @@ class DBService {
   }
 
   static Future<Product?> getProductByUuid(String uuid) async {
-    return isar.products.filter().uuidEqualTo(uuid).findFirst();
+    return isar.products
+        .filter()
+        .uuidEqualTo(uuid)
+        .and()
+        .deletedEqualTo(false)
+        .findFirst();
   }
 
   static Future<List<Customer>> getCustomers() async {
-    return isar.customers.filter().deletedEqualTo(false).findAll();
+    final customers =
+        await isar.customers.filter().deletedEqualTo(false).findAll();
+    final refreshedCustomers = <Customer>[];
+    for (final customer in customers) {
+      refreshedCustomers.add(
+        await recalculateCustomerAccount(customer.uuid) ?? customer,
+      );
+    }
+    return refreshedCustomers;
+  }
+
+  static void _enforceCustomerMonetaryInvariants(Customer customer) {
+    if (!customer.pendingDues.isFinite ||
+        customer.pendingDues.isNaN ||
+        customer.pendingDues < 0) {
+      customer.pendingDues = 0.0;
+    }
+    if (!customer.advanceBalance.isFinite ||
+        customer.advanceBalance.isNaN ||
+        customer.advanceBalance < 0) {
+      customer.advanceBalance = 0.0;
+    }
   }
 
   static Future<void> addCustomer(Customer customer) async {
@@ -457,6 +486,8 @@ class DBService {
     customer.version = 1;
     customer.isSynced = false;
     _ensureCustomerSyncFields(customer);
+    customer.pendingDues = 0.0;
+    customer.advanceBalance = 0.0;
 
     await isar.writeTxn(() async {
       await isar.customers.put(customer);
@@ -478,6 +509,8 @@ class DBService {
     customer.isSynced = false;
     customer.version += 1;
     _ensureCustomerSyncFields(customer);
+    _enforceCustomerMonetaryInvariants(customer);
+
     await isar.writeTxn(() async {
       await isar.customers.put(customer);
       await _appendChangeLog(
@@ -493,16 +526,43 @@ class DBService {
     syncV2?.triggerDebouncedSync();
   }
 
-  static Future<void> deleteCustomer(String customerUuid) async {
-    final customer =
-        await isar.customers.filter().uuidEqualTo(customerUuid).findFirst();
+  static Future<void> deleteCustomer(String customerUuid, {int? isarId}) async {
+    Customer? customer;
+    if (customerUuid.trim().isNotEmpty) {
+      customer =
+          await isar.customers.filter().uuidEqualTo(customerUuid).findFirst();
+    }
+    if (customer == null && isarId != null) {
+      customer = await isar.customers.get(isarId);
+    }
     if (customer == null) {
       return;
     }
 
+    // Safety check: repair any non-finite (NaN, Infinity) or negative accounting state from transaction history
+    final isPendingValid = customer.pendingDues.isFinite &&
+        !customer.pendingDues.isNaN &&
+        customer.pendingDues >= 0;
+    final isAdvanceValid = customer.advanceBalance.isFinite &&
+        !customer.advanceBalance.isNaN &&
+        customer.advanceBalance >= 0;
+
+    if (!isPendingValid || !isAdvanceValid) {
+      final state = await _computeCustomerAccountState(customer.uuid,
+          existingCustomer: customer);
+      if (state != null) {
+        customer.pendingDues = state.newPendingDues;
+        customer.advanceBalance = state.newAdvanceBalance;
+      } else {
+        customer.pendingDues = 0.0;
+        customer.advanceBalance = 0.0;
+      }
+    }
+
+    _enforceCustomerMonetaryInvariants(customer);
+
     await isar.writeTxn(() async {
-      // Soft-delete to keep historical links stable and avoid relational side-effects.
-      customer.deleted = true;
+      customer!.deleted = true;
       customer.updatedAt = DateTime.now();
       customer.isSynced = false;
       customer.version += 1;
@@ -524,7 +584,203 @@ class DBService {
     return isar.customers.get(id);
   }
 
+  /// Computes the exact customer account state (pendingDues & advanceBalance)
+  /// derived from active credit sales and active customer payments.
+  static Future<_CustomerAccountState?> _computeCustomerAccountState(
+      String customerUuid,
+      {Customer? existingCustomer}) async {
+    final customer = existingCustomer ??
+        await isar.customers.filter().uuidEqualTo(customerUuid).findFirst();
+    if (customer == null) return null;
+
+    final sales = await isar.sales
+        .filter()
+        .customerUuidEqualTo(customerUuid)
+        .and()
+        .saleTypeEqualTo(SaleType.credit)
+        .and()
+        .deletedEqualTo(false)
+        .findAll();
+
+    final payments = await isar.customerPayments
+        .filter()
+        .customerUuidEqualTo(customerUuid)
+        .and()
+        .deletedEqualTo(false)
+        .findAll();
+
+    final events = <_CustomerAccountEvent>[
+      for (final sale in sales) _CustomerAccountEvent.sale(sale),
+      for (final payment in payments) _CustomerAccountEvent.payment(payment),
+    ]..sort((a, b) {
+        final dateCompare = a.date.compareTo(b.date);
+        if (dateCompare != 0) return dateCompare;
+        return a.isarId.compareTo(b.isarId);
+      });
+
+    double netPosition = 0.0;
+    double availableSalePaymentCredits = 0.0;
+    for (final event in events) {
+      if (event.sale != null) {
+        final sale = event.sale!;
+        final totalAmount = _sanitizeAccountAmount(sale.totalAmount);
+        final amountReceived = _sanitizeAccountAmount(sale.amountReceived);
+        netPosition += totalAmount - amountReceived;
+        availableSalePaymentCredits += amountReceived;
+        continue;
+      }
+
+      final payment = event.payment!;
+      final amountReceived = _sanitizeAccountAmount(payment.amountReceived);
+      final previousDue = _sanitizeAccountAmount(payment.previousDue);
+
+      // Legacy sale-payment flows sometimes wrote an account-level receipt
+      // into both CustomerPayment and an older Sale.amountReceived. When that
+      // happened, the payment row still captured the true due before receipt.
+      // If the chronological sale ledger says less was due than the payment
+      // row says, reverse only the duplicated sale credit before applying the
+      // account-level payment.
+      final visibleDueBeforePayment = netPosition > 0 ? netPosition : 0.0;
+      final duplicatedSaleCredit = previousDue - visibleDueBeforePayment;
+      if (duplicatedSaleCredit > 0.01) {
+        final repairAmount = [
+          duplicatedSaleCredit,
+          amountReceived,
+          availableSalePaymentCredits,
+        ].reduce((a, b) => a < b ? a : b);
+        netPosition += repairAmount;
+        availableSalePaymentCredits -= repairAmount;
+      }
+
+      netPosition -= amountReceived;
+    }
+
+    if (!netPosition.isFinite || netPosition.isNaN) {
+      netPosition = 0.0;
+    } else {
+      netPosition = (netPosition * 100).roundToDouble() / 100;
+    }
+
+    double newPendingDues = 0.0;
+    double newAdvanceBalance = 0.0;
+
+    if (netPosition > 0) {
+      newPendingDues = netPosition;
+      newAdvanceBalance = 0.0;
+    } else if (netPosition < 0) {
+      newPendingDues = 0.0;
+      newAdvanceBalance = netPosition.abs();
+    } else {
+      newPendingDues = 0.0;
+      newAdvanceBalance = 0.0;
+    }
+
+    // Strict non-finite defenses
+    if (!newPendingDues.isFinite ||
+        newPendingDues.isNaN ||
+        newPendingDues < 0) {
+      newPendingDues = 0.0;
+    }
+    if (!newAdvanceBalance.isFinite ||
+        newAdvanceBalance.isNaN ||
+        newAdvanceBalance < 0) {
+      newAdvanceBalance = 0.0;
+    }
+
+    return _CustomerAccountState(
+      customer: customer,
+      newPendingDues: newPendingDues,
+      newAdvanceBalance: newAdvanceBalance,
+    );
+  }
+
+  static double _sanitizeAccountAmount(double value) {
+    if (!value.isFinite || value.isNaN || value < 0) return 0.0;
+    return value;
+  }
+
+  /// Recalculates and persists a customer's account balance.
+  static Future<Customer?> recalculateCustomerAccount(
+      String customerUuid) async {
+    final state = await _computeCustomerAccountState(customerUuid);
+    if (state == null) return null;
+
+    final c = state.customer;
+    final needsRepair = !c.pendingDues.isFinite ||
+        c.pendingDues.isNaN ||
+        !c.advanceBalance.isFinite ||
+        c.advanceBalance.isNaN ||
+        c.pendingDues < 0 ||
+        c.advanceBalance < 0;
+
+    if (c.pendingDues != state.newPendingDues ||
+        c.advanceBalance != state.newAdvanceBalance ||
+        needsRepair) {
+      c.pendingDues = state.newPendingDues;
+      c.advanceBalance = state.newAdvanceBalance;
+      _enforceCustomerMonetaryInvariants(c);
+      c.updatedAt = DateTime.now();
+      c.isSynced = false;
+      c.version += 1;
+
+      await isar.writeTxn(() async {
+        await isar.customers.put(c);
+        await _appendChangeLog(
+          collection: 'Customer',
+          operationType: 'UPDATE',
+          payload: c.toJson(),
+          recordId: c.isarId,
+          entityUuid: c.uuid,
+          entityVersion: c.version,
+        );
+      });
+      await _flushJournalEntries();
+      syncV2?.triggerDebouncedSync();
+    }
+    return c;
+  }
+
+  /// Startup reconciliation for all customer accounts (active and soft-deleted).
+  static Future<void> reconcileAllCustomerAccounts() async {
+    debugPrint(
+        'DBService [ACCOUNT RECONCILIATION]: Reconciling customer accounts...');
+    try {
+      final allCustomers = await isar.customers.where().findAll();
+      for (final customer in allCustomers) {
+        final isPendingValid = customer.pendingDues.isFinite &&
+            !customer.pendingDues.isNaN &&
+            customer.pendingDues >= 0;
+        final isAdvanceValid = customer.advanceBalance.isFinite &&
+            !customer.advanceBalance.isNaN &&
+            customer.advanceBalance >= 0;
+
+        if (customer.deleted) {
+          if (!isPendingValid || !isAdvanceValid) {
+            final state = await _computeCustomerAccountState(customer.uuid,
+                existingCustomer: customer);
+            customer.pendingDues = state?.newPendingDues ?? 0.0;
+            customer.advanceBalance = state?.newAdvanceBalance ?? 0.0;
+            _enforceCustomerMonetaryInvariants(customer);
+            await isar.writeTxn(() async {
+              await isar.customers.put(customer);
+            });
+          }
+        } else {
+          await recalculateCustomerAccount(customer.uuid);
+        }
+      }
+      debugPrint(
+          'DBService [ACCOUNT RECONCILIATION]: Reconciled ${allCustomers.length} customer accounts.');
+    } catch (e, st) {
+      debugPrint(
+          'DBService [ACCOUNT RECONCILIATION]: ❌ Failed to reconcile customer accounts: $e\n$st');
+    }
+  }
+
   static Future<void> addCustomerPayment(CustomerPayment payment) async {
+    if (payment.amountReceived <= 0) {
+      throw ArgumentError('Payment amount must be greater than zero.');
+    }
     payment.version = 1;
     payment.isSynced = false;
     if (payment.uuid.trim().isEmpty) {
@@ -534,14 +790,26 @@ class DBService {
       payment.deviceId = syncV2?.deviceId ?? _kUnknownDevice;
     }
 
-    final customer = await isar.customers
-        .filter()
-        .uuidEqualTo(payment.customerUuid)
-        .findFirst();
-
-    if (customer != null) {
-      customer.pendingDues -= payment.amountReceived;
-      if (customer.pendingDues < 0) customer.pendingDues = 0;
+    final state = await _computeCustomerAccountState(payment.customerUuid);
+    Customer? customer;
+    if (state != null) {
+      customer = state.customer;
+      final netCredit = payment.amountReceived;
+      final currentPosition = state.newPendingDues - state.newAdvanceBalance;
+      final newPosition = (currentPosition - netCredit);
+      final roundedPos = (newPosition * 100).roundToDouble() / 100;
+      if (roundedPos > 0) {
+        customer.pendingDues = roundedPos;
+        customer.advanceBalance = 0;
+      } else if (roundedPos < 0) {
+        customer.pendingDues = 0;
+        customer.advanceBalance = roundedPos.abs();
+      } else {
+        customer.pendingDues = 0;
+        customer.advanceBalance = 0;
+      }
+      payment.previousDue = state.newPendingDues;
+      payment.newDue = customer.pendingDues;
       customer.updatedAt = DateTime.now();
       customer.isSynced = false;
       customer.version += 1;
@@ -574,38 +842,17 @@ class DBService {
   }
 
   static Future<void> deleteCustomerPayment(int paymentIsarId) async {
-    // Load entities BEFORE the write transaction (reads outside writeTxn are safe)
     final payment = await isar.customerPayments.get(paymentIsarId);
     if (payment == null) return;
     if (payment.deleted) return;
-    final customer = await isar.customers
-        .filter()
-        .uuidEqualTo(payment.customerUuid)
-        .findFirst();
+    final customerUuid = payment.customerUuid;
 
-    if (customer != null) {
-      customer.pendingDues += payment.amountReceived;
-      customer.updatedAt = DateTime.now();
-      customer.isSynced = false;
-      customer.version += 1;
-    }
     payment.deleted = true;
     payment.updatedAt = DateTime.now();
     payment.isSynced = false;
     payment.version += 1;
 
     await isar.writeTxn(() async {
-      if (customer != null) {
-        await isar.customers.put(customer);
-        await _appendChangeLog(
-          collection: 'Customer',
-          operationType: 'UPDATE',
-          payload: customer.toJson(),
-          recordId: customer.isarId,
-          entityUuid: customer.uuid,
-          entityVersion: customer.version,
-        );
-      }
       await isar.customerPayments.put(payment);
       await _appendChangeLog(
         collection: 'CustomerPayment',
@@ -617,6 +864,7 @@ class DBService {
       );
     });
     await _flushJournalEntries();
+    await recalculateCustomerAccount(customerUuid);
     syncV2?.triggerDebouncedSync();
   }
 
@@ -712,29 +960,12 @@ class DBService {
     }
 
     if (oldSale != null) {
-      // Restore dues for old credit customer
-      if (oldSale.saleType == SaleType.credit && oldCustomer != null) {
-        oldCustomer.pendingDues -=
-            (oldSale.totalAmount - oldSale.amountReceived);
-        if (oldCustomer.pendingDues < 0) oldCustomer.pendingDues = 0;
-        oldCustomer.updatedAt = DateTime.now();
-        oldCustomer.isSynced = false;
-        oldCustomer.version += 1;
-      }
       sale.isarId = oldSale.isarId;
       sale.uuid = oldSale.uuid;
       sale.createdAt = oldSale.createdAt;
       sale.version = oldSale.version + 1;
     } else if (sale.version <= 0) {
       sale.version = 1;
-    }
-
-    // Add dues for new credit customer
-    if (newCustomer != null && sale.saleType == SaleType.credit) {
-      newCustomer.pendingDues += (sale.totalAmount - sale.amountReceived);
-      newCustomer.updatedAt = DateTime.now();
-      newCustomer.isSynced = false;
-      newCustomer.version += 1;
     }
 
     sale.updatedAt = DateTime.now();
@@ -757,31 +988,6 @@ class DBService {
           entityVersion: product.version,
         );
       }
-      if (oldSale != null) {
-        if (oldCustomer != null) {
-          await isar.customers.put(oldCustomer);
-          await _appendChangeLog(
-            collection: 'Customer',
-            operationType: 'UPDATE',
-            payload: oldCustomer.toJson(),
-            recordId: oldCustomer.isarId,
-            entityUuid: oldCustomer.uuid,
-            entityVersion: oldCustomer.version,
-          );
-        }
-      }
-
-      if (newCustomer != null && newCustomer != oldCustomer) {
-        await isar.customers.put(newCustomer);
-        await _appendChangeLog(
-          collection: 'Customer',
-          operationType: 'UPDATE',
-          payload: newCustomer.toJson(),
-          recordId: newCustomer.isarId,
-          entityUuid: newCustomer.uuid,
-          entityVersion: newCustomer.version,
-        );
-      }
 
       await isar.sales.put(sale);
       await _appendChangeLog(
@@ -794,6 +1000,15 @@ class DBService {
       );
     });
     await _flushJournalEntries();
+
+    // Recalculate customer account balances for old and new customer
+    if (oldCustomer != null) {
+      await recalculateCustomerAccount(oldCustomer.uuid);
+    }
+    if (newCustomer != null && newCustomer.uuid != oldCustomer?.uuid) {
+      await recalculateCustomerAccount(newCustomer.uuid);
+    }
+
     syncV2?.triggerDebouncedSync();
   }
 
@@ -816,6 +1031,9 @@ class DBService {
       );
     });
     await _flushJournalEntries();
+    if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
+      await recalculateCustomerAccount(sale.customerUuid!);
+    }
     syncV2?.triggerDebouncedSync();
   }
 
@@ -850,20 +1068,6 @@ class DBService {
       }
     }
 
-    Customer? customer;
-    if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
-      customer = await isar.customers
-          .filter()
-          .uuidEqualTo(sale.customerUuid!)
-          .findFirst();
-    }
-    if (customer != null) {
-      customer.pendingDues -= (sale.totalAmount - sale.amountReceived);
-      if (customer.pendingDues < 0) customer.pendingDues = 0;
-      customer.updatedAt = DateTime.now();
-      customer.isSynced = false;
-      customer.version += 1;
-    }
     sale.deleted = true;
     sale.updatedAt = DateTime.now();
     sale.isSynced = false;
@@ -881,17 +1085,6 @@ class DBService {
           entityVersion: product.version,
         );
       }
-      if (customer != null) {
-        await isar.customers.put(customer);
-        await _appendChangeLog(
-          collection: 'Customer',
-          operationType: 'UPDATE',
-          payload: customer.toJson(),
-          recordId: customer.isarId,
-          entityUuid: customer.uuid,
-          entityVersion: customer.version,
-        );
-      }
       await isar.sales.put(sale);
       await _appendChangeLog(
         collection: 'Sale',
@@ -903,6 +1096,9 @@ class DBService {
       );
     });
     await _flushJournalEntries();
+    if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
+      await recalculateCustomerAccount(sale.customerUuid!);
+    }
     syncV2?.triggerDebouncedSync();
   }
 
@@ -924,13 +1120,6 @@ class DBService {
           .findFirst();
       if (p != null) productsMap[item.productUuid] = p;
     }
-    Customer? customer;
-    if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
-      customer = await isar.customers
-          .filter()
-          .uuidEqualTo(sale.customerUuid!)
-          .findFirst();
-    }
 
     // Mutate in memory
     for (final item in sale.items) {
@@ -941,13 +1130,6 @@ class DBService {
         p.isSynced = false;
         p.version += 1;
       }
-    }
-    if (customer != null) {
-      customer.pendingDues -= (sale.totalAmount - sale.amountReceived);
-      if (customer.pendingDues < 0) customer.pendingDues = 0;
-      customer.updatedAt = DateTime.now();
-      customer.isSynced = false;
-      customer.version += 1;
     }
     sale.deleted = true;
     sale.updatedAt = DateTime.now();
@@ -966,17 +1148,6 @@ class DBService {
           entityVersion: product.version,
         );
       }
-      if (customer != null) {
-        await isar.customers.put(customer);
-        await _appendChangeLog(
-          collection: 'Customer',
-          operationType: 'UPDATE',
-          payload: customer.toJson(),
-          recordId: customer.isarId,
-          entityUuid: customer.uuid,
-          entityVersion: customer.version,
-        );
-      }
       await isar.sales.put(sale);
       await _appendChangeLog(
         collection: 'Sale',
@@ -988,6 +1159,9 @@ class DBService {
       );
     });
     await _flushJournalEntries();
+    if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
+      await recalculateCustomerAccount(sale.customerUuid!);
+    }
     syncV2?.triggerDebouncedSync();
   }
 
@@ -1010,26 +1184,10 @@ class DBService {
     }
     if (sale == null) return;
 
-    final delta = newAmountReceived - sale.amountReceived;
     sale.amountReceived = newAmountReceived;
     sale.updatedAt = DateTime.now();
     sale.isSynced = false;
     sale.version += 1;
-
-    Customer? customer;
-    if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
-      customer = await isar.customers
-          .filter()
-          .uuidEqualTo(sale.customerUuid!)
-          .findFirst();
-      if (customer != null) {
-        customer.pendingDues -= delta;
-        if (customer.pendingDues < 0) customer.pendingDues = 0;
-        customer.updatedAt = DateTime.now();
-        customer.isSynced = false;
-        customer.version += 1;
-      }
-    }
 
     await isar.writeTxn(() async {
       await isar.sales.put(sale!);
@@ -1041,19 +1199,11 @@ class DBService {
         entityUuid: sale.uuid,
         entityVersion: sale.version,
       );
-      if (customer != null) {
-        await isar.customers.put(customer);
-        await _appendChangeLog(
-          collection: 'Customer',
-          operationType: 'UPDATE',
-          payload: customer.toJson(),
-          recordId: customer.isarId,
-          entityUuid: customer.uuid,
-          entityVersion: customer.version,
-        );
-      }
     });
     await _flushJournalEntries();
+    if (sale.saleType == SaleType.credit && sale.customerUuid != null) {
+      await recalculateCustomerAccount(sale.customerUuid!);
+    }
     syncV2?.triggerDebouncedSync();
   }
 
@@ -1070,7 +1220,15 @@ class DBService {
   static Future<void> updateCustomerDues(int id, double newDue) async {
     final customer = await isar.customers.get(id);
     if (customer == null) return;
-    customer.pendingDues = newDue;
+    final safeDue = (!newDue.isFinite || newDue.isNaN) ? 0.0 : newDue;
+    if (safeDue >= 0) {
+      customer.pendingDues = safeDue;
+      customer.advanceBalance = 0;
+    } else {
+      customer.pendingDues = 0;
+      customer.advanceBalance = safeDue.abs();
+    }
+    _enforceCustomerMonetaryInvariants(customer);
     customer.updatedAt = DateTime.now();
     customer.isSynced = false;
     customer.version += 1;
@@ -1096,7 +1254,15 @@ class DBService {
     final customer =
         await isar.customers.filter().uuidEqualTo(customerUuid).findFirst();
     if (customer == null) return;
-    customer.pendingDues = newDue;
+    final safeDue = (!newDue.isFinite || newDue.isNaN) ? 0.0 : newDue;
+    if (safeDue >= 0) {
+      customer.pendingDues = safeDue;
+      customer.advanceBalance = 0;
+    } else {
+      customer.pendingDues = 0;
+      customer.advanceBalance = safeDue.abs();
+    }
+    _enforceCustomerMonetaryInvariants(customer);
     customer.updatedAt = DateTime.now();
     customer.isSynced = false;
     customer.version += 1;
@@ -1721,7 +1887,8 @@ class DBService {
 
     final newQty = item.quantity + deltaQuantity;
     if (newQty < 0) {
-      throw StateError('Cannot reduce stock below zero. Current: ${item.quantity}');
+      throw StateError(
+          'Cannot reduce stock below zero. Current: ${item.quantity}');
     }
 
     item.quantity = newQty;
@@ -2027,5 +2194,36 @@ class _JournalEntry {
     required this.operation,
     required this.entityVersion,
     required this.payload,
+  });
+}
+
+class _CustomerAccountEvent {
+  final Sale? sale;
+  final CustomerPayment? payment;
+  final DateTime date;
+  final int isarId;
+
+  _CustomerAccountEvent.sale(Sale sale)
+      : sale = sale,
+        payment = null,
+        date = sale.date,
+        isarId = sale.isarId;
+
+  _CustomerAccountEvent.payment(CustomerPayment payment)
+      : sale = null,
+        payment = payment,
+        date = payment.date,
+        isarId = payment.isarId;
+}
+
+class _CustomerAccountState {
+  final Customer customer;
+  final double newPendingDues;
+  final double newAdvanceBalance;
+
+  const _CustomerAccountState({
+    required this.customer,
+    required this.newPendingDues,
+    required this.newAdvanceBalance,
   });
 }

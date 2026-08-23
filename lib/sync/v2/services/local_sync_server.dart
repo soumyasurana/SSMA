@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
@@ -15,6 +15,7 @@ import 'change_processor.dart';
 import 'cursor_manager.dart';
 import 'device_registry.dart';
 import 'sync_manager.dart' show SyncStatusV2;
+import '../../../services/db_service.dart' show DBService;
 
 /// The local HTTP server that makes this device a sync endpoint.
 ///
@@ -252,6 +253,13 @@ class LocalSyncServer {
 
       if (result.applied > 0) {
         syncV2?.statusNotifier.setStatus(SyncStatusV2.idle);
+        // Schedule a deferred reconciliation: synced Sale / CustomerPayment
+        // records change the transaction ledger but handler code runs inside
+        // a writeTxn that forbids nested reads — so it cannot update the
+        // cached Customer.pendingDues / advanceBalance inline. Reconcile
+        // after the HTTP response is sent so the server isn't blocked.
+        Future.delayed(const Duration(milliseconds: 200),
+            DBService.reconcileAllCustomerAccounts);
       }
 
       return _json({

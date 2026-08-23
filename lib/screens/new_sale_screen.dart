@@ -581,9 +581,9 @@ class _NewSaleScreenState extends State<NewSaleScreen> {
         ? (double.tryParse(_amountReceivedController.text.trim()) ?? 0.0)
         : paymentEntries.fold(0.0, (sum, entry) => sum + entry.amount);
 
-    if (amountReceived - totalAmount > 0.01) {
+    if (_selectedSaleType == SaleType.cash && amountReceived - totalAmount > 0.01) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Payments cannot exceed bill total.')),
+        const SnackBar(content: Text('Payments cannot exceed bill total for cash sales.')),
       );
       return;
     }

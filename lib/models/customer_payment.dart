@@ -1,4 +1,4 @@
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 
 part 'customer_payment.g.dart';
@@ -53,6 +53,21 @@ class CustomerPayment {
     deleted = false;
   }
 
+  static double _sanitizeMonetary(dynamic val) {
+    if (val == null) return 0.0;
+    if (val is num) {
+      final d = val.toDouble();
+      if (!d.isFinite || d.isNaN) return 0.0;
+      return d < 0 ? 0.0 : d;
+    }
+    if (val is String) {
+      final parsed = double.tryParse(val);
+      if (parsed == null || !parsed.isFinite || parsed.isNaN) return 0.0;
+      return parsed < 0 ? 0.0 : parsed;
+    }
+    return 0.0;
+  }
+
   // ---------------------------
   // JSON → BACKEND
   // ---------------------------
@@ -60,9 +75,9 @@ class CustomerPayment {
         "id": uuid,
         "customer_id": customerUuid,
         "customer_name": customerName,
-        "amount_received": amountReceived,
-        "previous_due": previousDue,
-        "new_due": newDue,
+        "amount_received": _sanitizeMonetary(amountReceived),
+        "previous_due": _sanitizeMonetary(previousDue),
+        "new_due": _sanitizeMonetary(newDue),
         "payment_date": date.toIso8601String(),
         "version": version,
         "device_id": deviceId,
@@ -81,9 +96,9 @@ class CustomerPayment {
     p.customerUuid = json["customer_id"];
     p.customerName = json["customer_name"];
 
-    p.amountReceived = (json["amount_received"] ?? 0).toDouble();
-    p.previousDue = (json["previous_due"] ?? 0).toDouble();
-    p.newDue = (json["new_due"] ?? 0).toDouble();
+    p.amountReceived = _sanitizeMonetary(json["amount_received"]);
+    p.previousDue = _sanitizeMonetary(json["previous_due"]);
+    p.newDue = _sanitizeMonetary(json["new_due"]);
 
     p.date = DateTime.parse(json["payment_date"]);
 

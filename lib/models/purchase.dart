@@ -1,4 +1,4 @@
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 import 'purchase_item.dart';
 
@@ -56,14 +56,29 @@ class Purchase {
     deleted = false;
   }
 
+  static double _sanitizeMonetary(dynamic val) {
+    if (val == null) return 0.0;
+    if (val is num) {
+      final d = val.toDouble();
+      if (!d.isFinite || d.isNaN) return 0.0;
+      return d < 0 ? 0.0 : d;
+    }
+    if (val is String) {
+      final parsed = double.tryParse(val);
+      if (parsed == null || !parsed.isFinite || parsed.isNaN) return 0.0;
+      return parsed < 0 ? 0.0 : parsed;
+    }
+    return 0.0;
+  }
+
   // ---------------------------
   // JSON → BACKEND
   // ---------------------------
   Map<String, dynamic> toJson() => {
         "id": uuid,
         "supplier_id": supplierUuid,
-        "total_amount": totalAmount,
-        "amount_paid": amountPaid,
+        "total_amount": _sanitizeMonetary(totalAmount),
+        "amount_paid": _sanitizeMonetary(amountPaid),
         "purchase_date": date.toIso8601String(),
         "note": note,
         "items": items.map((e) => e.toJson()).toList(),
@@ -83,8 +98,8 @@ class Purchase {
     p.uuid = json["id"];
     p.supplierUuid = json["supplier_id"];
 
-    p.totalAmount = (json["total_amount"] ?? 0).toDouble();
-    p.amountPaid = (json["amount_paid"] ?? 0).toDouble();
+    p.totalAmount = _sanitizeMonetary(json["total_amount"]);
+    p.amountPaid = _sanitizeMonetary(json["amount_paid"]);
     p.date = DateTime.parse(json["purchase_date"]);
 
     p.note = json["note"];

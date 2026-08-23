@@ -1,4 +1,4 @@
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 
 part 'customer.g.dart';
@@ -14,6 +14,7 @@ class Customer {
   late String name;
   String? phone;
   double pendingDues = 0;
+  double advanceBalance = 0;
 
   // Sync fields
   int version = 1;
@@ -30,6 +31,7 @@ class Customer {
     required this.name,
     this.phone,
     this.pendingDues = 0,
+    this.advanceBalance = 0,
     required this.deviceId,
   }) {
     final now = DateTime.now();
@@ -43,6 +45,21 @@ class Customer {
     version = 1;
   }
 
+  static double _sanitizeMonetary(dynamic val) {
+    if (val == null) return 0.0;
+    if (val is num) {
+      final d = val.toDouble();
+      if (!d.isFinite || d.isNaN) return 0.0;
+      return d < 0 ? 0.0 : d;
+    }
+    if (val is String) {
+      final parsed = double.tryParse(val);
+      if (parsed == null || !parsed.isFinite || parsed.isNaN) return 0.0;
+      return parsed < 0 ? 0.0 : parsed;
+    }
+    return 0.0;
+  }
+
   // ---------------------------
   // JSON → BACKEND
   // ---------------------------
@@ -50,7 +67,8 @@ class Customer {
         "id": uuid, // ✅ backend ID = uuid
         "name": name,
         "phone": phone,
-        "pending_dues": pendingDues,
+        "pending_dues": _sanitizeMonetary(pendingDues),
+        "advance_balance": _sanitizeMonetary(advanceBalance),
         "version": version,
         "device_id": deviceId,
         "is_deleted": deleted,
@@ -67,7 +85,8 @@ class Customer {
     c.uuid = json["id"]; // ✅ FIXED
     c.name = json["name"];
     c.phone = json["phone"];
-    c.pendingDues = (json["pending_dues"] ?? 0).toDouble();
+    c.pendingDues = _sanitizeMonetary(json["pending_dues"]);
+    c.advanceBalance = _sanitizeMonetary(json["advance_balance"]);
 
     c.version = json["version"];
     c.deviceId = json["device_id"];

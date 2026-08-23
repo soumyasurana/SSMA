@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:ssma/models/godown_item.dart';
 import 'package:ssma/models/godown_movement.dart';
 import 'package:ssma/services/db_service.dart';

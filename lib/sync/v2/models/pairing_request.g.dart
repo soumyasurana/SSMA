@@ -129,7 +129,7 @@ const PairingRequestSchema = CollectionSchema(
   getId: _pairingRequestGetId,
   getLinks: _pairingRequestGetLinks,
   attach: _pairingRequestAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _pairingRequestEstimateSize(

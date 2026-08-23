@@ -1,4 +1,4 @@
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 import 'sale_item.dart';
 
@@ -76,6 +76,21 @@ class Sale {
       ..updatedAt = now;
   }
 
+  static double _sanitizeMonetary(dynamic val) {
+    if (val == null) return 0.0;
+    if (val is num) {
+      final d = val.toDouble();
+      if (!d.isFinite || d.isNaN) return 0.0;
+      return d < 0 ? 0.0 : d;
+    }
+    if (val is String) {
+      final parsed = double.tryParse(val);
+      if (parsed == null || !parsed.isFinite || parsed.isNaN) return 0.0;
+      return parsed < 0 ? 0.0 : parsed;
+    }
+    return 0.0;
+  }
+
   // ---------------------------
   // JSON → BACKEND
   // ---------------------------
@@ -84,8 +99,8 @@ class Sale {
         "customer_id": customerUuid,
         "buyer_name": buyerName,
         "buyer_contact": buyerContact,
-        "total_amount": totalAmount,
-        "amount_received": amountReceived,
+        "total_amount": _sanitizeMonetary(totalAmount),
+        "amount_received": _sanitizeMonetary(amountReceived),
         "sale_date": date.toIso8601String(),
         "sale_type": saleType.name,
         "comment": comment,
@@ -109,8 +124,8 @@ class Sale {
     s.buyerName = json["buyer_name"];
     s.buyerContact = json["buyer_contact"];
 
-    s.totalAmount = (json["total_amount"] ?? 0).toDouble();
-    s.amountReceived = (json["amount_received"] ?? 0).toDouble();
+    s.totalAmount = _sanitizeMonetary(json["total_amount"]);
+    s.amountReceived = _sanitizeMonetary(json["amount_received"]);
 
     s.date = DateTime.parse(json["sale_date"]);
 

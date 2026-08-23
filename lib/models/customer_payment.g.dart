@@ -94,7 +94,7 @@ const CustomerPaymentSchema = CollectionSchema(
   getId: _customerPaymentGetId,
   getLinks: _customerPaymentGetLinks,
   attach: _customerPaymentAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _customerPaymentEstimateSize(
