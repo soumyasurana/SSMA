@@ -38,6 +38,7 @@ class PDFService {
     double remainingAdvanceAfterSale = 0.0;
     double amountPayable = sale.totalAmount;
     double remainingDueAfterSale = 0.0;
+    double advanceCreated = 0.0;
 
         if (sale.saleType == SaleType.credit) {
       Customer? customer;
@@ -90,9 +91,13 @@ class PDFService {
         amountPayable = sale.totalAmount - advanceAdjusted;
       }
 
-      remainingDueAfterSale =
-          previousDue + (amountPayable - sale.amountReceived);
-      if (remainingDueAfterSale < 0) remainingDueAfterSale = 0.0;
+      final totalOwedThisSale = previousDue + amountPayable;
+      if (sale.amountReceived > totalOwedThisSale) {
+        advanceCreated = sale.amountReceived - totalOwedThisSale;
+        remainingDueAfterSale = 0.0;
+      } else {
+        remainingDueAfterSale = totalOwedThisSale - sale.amountReceived;
+      }
     }
     
     pw.ImageProvider? logo;
@@ -465,8 +470,8 @@ class PDFService {
                     ),
                   ],
 
-                  // Remaining Advance (if customer had advance)
-                  if (priorAdvance > 0) ...[
+                  // Remaining/New Advance (from prior advance carried over + overpayment on this sale)
+                  if ((remainingAdvanceAfterSale + advanceCreated) > 0.01) ...[
                     pw.Container(height: 0.5, color: dividerColor),
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
@@ -474,10 +479,10 @@ class PDFService {
                       child: pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
-                          pw.Text('Remaining Customer Advance:',
+                          pw.Text('Customer Advance Balance:',
                               style: labelStyle),
                           pw.Text(
-                              'Rs. ${remainingAdvanceAfterSale.toStringAsFixed(2)}',
+                              'Rs. ${(remainingAdvanceAfterSale + advanceCreated).toStringAsFixed(2)}',
                               style: pw.TextStyle(
                                   font: boldFont,
                                   fontSize: 11,
@@ -1117,7 +1122,22 @@ class PDFService {
   }
 
   static Future<void> generateLedgerPdf(Sale sale) async {
-    final customer = Customer()
+    Customer? customer;
+    if (sale.customerUuid != null && sale.customerUuid!.isNotEmpty) {
+      customer = await DBService.isar.customers
+          .filter()
+          .uuidEqualTo(sale.customerUuid!)
+          .findFirst();
+    }
+    if (customer == null && sale.buyerName != null && sale.buyerName!.isNotEmpty) {
+      customer = await DBService.isar.customers
+          .filter()
+          .nameEqualTo(sale.buyerName!)
+          .and()
+          .deletedEqualTo(false)
+          .findFirst();
+    }
+    customer ??= Customer()
       ..uuid = sale.customerUuid ?? ''
       ..name = sale.buyerName ?? 'Customer Account'
       ..phone = sale.buyerContact;
