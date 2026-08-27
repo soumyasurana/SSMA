@@ -165,6 +165,11 @@ class PDFService {
       ];
     }).toList();
 
+    final double itemsSubtotal = sale.items.fold<double>(
+      0.0,
+      (sum, item) => sum + (item.unitPrice * item.quantity),
+    );
+
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -346,7 +351,7 @@ class PDFService {
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
                         pw.Text('Sale Total:', style: labelStyle),
-                        pw.Text('Rs. ${sale.totalAmount.toStringAsFixed(2)}',
+                        pw.Text('Rs. ${itemsSubtotal.toStringAsFixed(2)}',
                             style: valueStyle),
                       ],
                     ),
